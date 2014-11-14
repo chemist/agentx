@@ -9,8 +9,10 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Control.Applicative hiding (empty)
 import Data.Monoid
+import Data.Bits
+import Data.Bits.Bitwise (fromListLE, toListLE)
 
-data Packet = Packet Version PDU Flags SessionID TransactionID PacketID PayloadLenght deriving Show
+data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
 
 newtype Timeout = Timeout Word8 deriving (Show, Eq, Ord)
 newtype Description = Description ByteString deriving (Show, Eq)
@@ -116,27 +118,57 @@ instance Enum RError where
 
 data PDU = Open Timeout OID Description -- 6.2.1
          | Close Reason                 -- 6.2.2
-         | Register   Context Timeout Priority RangeSubid SubTree (Maybe UpperBound) -- 6.2.3
-         | Unregister Context         Priority RangeSubid SubTree (Maybe UpperBound) -- 6.2.4
-         | Get        Context [SearchRange] -- 6.2.5
-         | GetNext    Context [SearchRange] -- 6.2.6
-         | GetBulk    Context NonRepeaters MaxRepeaters [SearchRange] -- 6.2.7
-         | TestSet    Context [VarBind]  -- 6.2.8
+         | Register   (Maybe Context) Timeout Priority RangeSubid SubTree (Maybe UpperBound) -- 6.2.3
+         | Unregister (Maybe Context)         Priority RangeSubid SubTree (Maybe UpperBound) -- 6.2.4
+         | Get        (Maybe Context) [SearchRange] -- 6.2.5
+         | GetNext    (Maybe Context) [SearchRange] -- 6.2.6
+         | GetBulk    (Maybe Context) NonRepeaters MaxRepeaters [SearchRange] -- 6.2.7
+         | TestSet    (Maybe Context) [VarBind]  -- 6.2.8
          | CommitSet -- 6.2.9
          | UndoSet -- 6.2.9
          | CleanupSet -- 6.2.9
-         | Notify     Context [VarBind] -- 6.2.10
-         | Ping       Context  -- 6.2.11
-         | IndexAllocate   Context [VarBind] -- 6.2.12
-         | IndexDeallocate Context [VarBind] -- 6.2.13
-         | AddAgentCaps    Context OID Description  -- 6.2.14
-         | RemoveAgentCaps Context OID  -- 6.2.15
+         | Notify     (Maybe Context) [VarBind] -- 6.2.10
+         | Ping       (Maybe Context)  -- 6.2.11
+         | IndexAllocate   (Maybe Context) [VarBind] -- 6.2.12
+         | IndexDeallocate (Maybe Context) [VarBind] -- 6.2.13
+         | AddAgentCaps    (Maybe Context) OID Description  -- 6.2.14
+         | RemoveAgentCaps (Maybe Context) OID  -- 6.2.15
          | Response   SysUptime RError Index (Maybe VarBind) -- 6.2.16
          deriving (Show, Eq)
+
+pduToTag :: PDU -> Word8
+pduToTag Open{}            = 1
+pduToTag Close{}           = 2
+pduToTag Register{}        = 3
+pduToTag Unregister{}      = 4
+pduToTag Get{}             = 5
+pduToTag GetNext{}         = 6
+pduToTag GetBulk{}         = 7
+pduToTag TestSet{}         = 8
+pduToTag CommitSet{}       = 9
+pduToTag UndoSet{}         = 10
+pduToTag CleanupSet{}      = 11
+pduToTag Notify{}          = 12
+pduToTag Ping{}            = 13
+pduToTag IndexAllocate{}   = 14
+pduToTag IndexDeallocate{} = 15
+pduToTag AddAgentCaps{}    = 16
+pduToTag RemoveAgentCaps{} = 17
+pduToTag Response{}        = 18
 
 type Version = Word8
 
 data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext NetworkByteOrder deriving (Show)
+
+flagsToTag :: Flags -> Word8
+flagsToTag (Flags instanceRegistration newIndex anyIndex nonDefCont nbo) = 
+    fromListLE [instanceRegistration, newIndex, anyIndex, nonDefCont, nbo]
+
+flagsFromTag :: Word8 -> Flags
+flagsFromTag x =
+    let (i:n:a:nd:nb:_) = toListLE x
+    in Flags i n a nd nb
+
 
 type InstanceRegistration = Bool
 type NewIndex = Bool
@@ -233,4 +265,17 @@ getType (Value x) = getType' x
   getType' (Snmp.NoSuchInstance) = 129
   getType' (Snmp.EndOfMibView) = 130
 
+----------------------------------------------------------------------------------------------------------------------
+-- Packet 
+----------------------------------------------------------------------------------------------------------------------
 
+-- data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
+-- data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext NetworkByteOrder deriving (Show)
+packetToBuilder :: Packet -> Builder
+packetToBuilder (Packet _ p f@(Flags _ _ _ _ nbo) (SessionID sid) (TransactionID tid) (PacketID pid)) =
+    let header = singleton 1 <> singleton (pduToTag p) <> singleton (flagsToTag f) <> singleton 0
+        (body, PayloadLenght l) = pduToBuilder p f
+    in header <> builder32 nbo sid <> builder32 nbo tid <> builder32 nbo pid <> builder32 nbo l <> body
+
+pduToBuilder :: PDU -> Flags -> (Builder, PayloadLenght)
+pduToBuilder = undefined
