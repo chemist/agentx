@@ -4,6 +4,7 @@ import Data.Word
 import Data.Binary
 import Data.Binary.Put (putBuilder)
 import Data.Binary.Builder
+import Network.Protocol.Snmp (Value(..), OID)
 import qualified Network.Protocol.Snmp as Snmp
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
@@ -191,10 +192,6 @@ newtype PayloadLenght = PayloadLenght Word32 deriving (Show, Eq)
 
 data VarBind = VarBind OID Value deriving (Show, Eq)
 
-newtype OID = OID Snmp.OID deriving (Show, Eq)
-
-newtype Value = Value Snmp.Value deriving (Show, Eq)
-
 varBindToBuilder :: NetworkByteOrder -> VarBind -> Builder
 varBindToBuilder bo (VarBind o v) = 
      builder16 bo (getType v) <> builder16 bo 0 
@@ -217,11 +214,11 @@ inc True = singleton 1
 inc False = singleton 0
 
 oidToBuilder :: BigEndian -> Include -> OID -> Builder
-oidToBuilder _ _  (OID []) = singleton 0 <> singleton 0 <> singleton 0 <> singleton 0
-oidToBuilder bo i (OID (1:3:6:1:xs)) = 
+oidToBuilder _ _  [] = singleton 0 <> singleton 0 <> singleton 0 <> singleton 0
+oidToBuilder bo i (1:3:6:1:xs) = 
   singleton (fromIntegral (length xs - 1)) <> singleton (fromIntegral (head xs)) <> inc i <> singleton 0
   <> (foldl1 (<>) (map (singleton . fromIntegral) (tail xs)))
-oidToBuilder bo i (OID xs) = 
+oidToBuilder bo i xs = 
   singleton (fromIntegral (length xs )) <> singleton 0 <> inc i <> singleton 0
   <> (foldl1 (<>) (map (singleton . fromIntegral) xs))
 
@@ -233,37 +230,35 @@ bsToBuilder bo bs = builder32 bo (fromIntegral (B.length bs)) <> fromByteString 
   tailLen = fromIntegral (4 - B.length bs `rem` 4) `rem` 4
 
 valueToBuilder :: Bool -> Value -> Builder
-valueToBuilder bo (Value (Snmp.Integer x)) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Value (Snmp.Counter32 x)) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Value (Snmp.Counter64 x)) = builder64 bo $ fromIntegral x
-valueToBuilder bo (Value (Snmp.Gaude32 x)) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Value (Snmp.TimeTicks x)) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Value (Snmp.OI xs)) = oidToBuilder bo False (OID xs)
-valueToBuilder bo (Value (Snmp.String xs)) = bsToBuilder bo xs
-valueToBuilder bo (Value (Snmp.Opaque xs)) = bsToBuilder bo xs
-valueToBuilder bo (Value (Snmp.IpAddress a b c d)) = bsToBuilder bo $ B.pack [a,b,c,d]
-valueToBuilder bo (Value (Snmp.Zero)) = empty
-valueToBuilder bo (Value (Snmp.NoSuchObject)) = empty
-valueToBuilder bo (Value (Snmp.NoSuchInstance)) = empty
-valueToBuilder bo (Value (Snmp.EndOfMibView)) = empty
+valueToBuilder bo (Snmp.Integer x) = builder32 bo $ fromIntegral x
+valueToBuilder bo (Snmp.Counter32 x) = builder32 bo $ fromIntegral x
+valueToBuilder bo (Snmp.Counter64 x) = builder64 bo $ fromIntegral x
+valueToBuilder bo (Snmp.Gaude32 x) = builder32 bo $ fromIntegral x
+valueToBuilder bo (Snmp.TimeTicks x) = builder32 bo $ fromIntegral x
+valueToBuilder bo (Snmp.OI xs) = oidToBuilder bo False xs
+valueToBuilder bo (Snmp.String xs) = bsToBuilder bo xs
+valueToBuilder bo (Snmp.Opaque xs) = bsToBuilder bo xs
+valueToBuilder bo (Snmp.IpAddress a b c d) = bsToBuilder bo $ B.pack [a,b,c,d]
+valueToBuilder bo (Snmp.Zero) = empty
+valueToBuilder bo (Snmp.NoSuchObject) = empty
+valueToBuilder bo (Snmp.NoSuchInstance) = empty
+valueToBuilder bo (Snmp.EndOfMibView) = empty
 
 
 getType :: Value -> Word16
-getType (Value x) = getType' x
-  where
-  getType' (Snmp.Integer _) = 2
-  getType' (Snmp.String _) = 4
-  getType' (Snmp.Zero) = 5
-  getType' (Snmp.OI _) = 6
-  getType' (Snmp.IpAddress _ _ _ _) = 64
-  getType' (Snmp.Counter32 _) = 65
-  getType' (Snmp.Gaude32 _) = 66
-  getType' (Snmp.TimeTicks _) = 67
-  getType' (Snmp.Opaque _) = 68
-  getType' (Snmp.Counter64 _) = 70
-  getType' (Snmp.NoSuchObject) = 128
-  getType' (Snmp.NoSuchInstance) = 129
-  getType' (Snmp.EndOfMibView) = 130
+getType (Snmp.Integer _) = 2
+getType (Snmp.String _) = 4
+getType (Snmp.Zero) = 5
+getType (Snmp.OI _) = 6
+getType (Snmp.IpAddress _ _ _ _) = 64
+getType (Snmp.Counter32 _) = 65
+getType (Snmp.Gaude32 _) = 66
+getType (Snmp.TimeTicks _) = 67
+getType (Snmp.Opaque _) = 68
+getType (Snmp.Counter64 _) = 70
+getType (Snmp.NoSuchObject) = 128
+getType (Snmp.NoSuchInstance) = 129
+getType (Snmp.EndOfMibView) = 130
 
 ----------------------------------------------------------------------------------------------------------------------
 -- Packet 
