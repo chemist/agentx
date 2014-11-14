@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Data.Word
@@ -159,11 +160,14 @@ pduToTag Response{}        = 18
 
 type Version = Word8
 
-data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext NetworkByteOrder deriving (Show)
+class ToBuilder a where
+    toBuilder :: BigEndian -> Index -> a -> Builder
 
-flagsToTag :: Flags -> Word8
-flagsToTag (Flags instanceRegistration newIndex anyIndex nonDefCont nbo) = 
-    fromListLE [instanceRegistration, newIndex, anyIndex, nonDefCont, nbo]
+data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext BigEndian deriving (Show)
+
+instance ToBuilder Flags where
+    toBuilder _ _ (Flags instanceRegistration newIndex anyIndex nonDefCont nbo) = 
+        singleton $ fromListLE [instanceRegistration, newIndex, anyIndex, nonDefCont, nbo]
 
 flagsFromTag :: Word8 -> Flags
 flagsFromTag x =
@@ -175,8 +179,6 @@ type InstanceRegistration = Bool
 type NewIndex = Bool
 type AnyIndex = Bool
 type NonDefaultContext = Bool
-type NetworkByteOrder = Bool
-
 
 newtype SessionID = SessionID Word32 deriving (Show, Eq)
 
@@ -192,7 +194,7 @@ newtype PayloadLenght = PayloadLenght Word32 deriving (Show, Eq)
 
 data VarBind = VarBind OID Value deriving (Show, Eq)
 
-varBindToBuilder :: NetworkByteOrder -> VarBind -> Builder
+varBindToBuilder :: BigEndian -> VarBind -> Builder
 varBindToBuilder bo (VarBind o v) = 
      builder16 bo (getType v) <> builder16 bo 0 
   <> oidToBuilder bo False o 
@@ -268,7 +270,7 @@ getType (Snmp.EndOfMibView) = 130
 -- data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext NetworkByteOrder deriving (Show)
 packetToBuilder :: Packet -> Builder
 packetToBuilder (Packet _ p f@(Flags _ _ _ _ nbo) (SessionID sid) (TransactionID tid) (PacketID pid)) =
-    let header = singleton 1 <> singleton (pduToTag p) <> singleton (flagsToTag f) <> singleton 0
+    let header = singleton 1 <> singleton (pduToTag p) <> toBuilder undefined undefined f <> singleton 0
         (body, PayloadLenght l) = pduToBuilder p f
     in header <> builder32 nbo sid <> builder32 nbo tid <> builder32 nbo pid <> builder32 nbo l <> body
 
