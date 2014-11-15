@@ -161,12 +161,12 @@ pduToTag Response{}        = 18
 type Version = Word8
 
 class ToBuilder a where
-    toBuilder :: BigEndian -> Index -> a -> Builder
+    toBuilder :: a 
 
 data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext BigEndian deriving (Show)
 
-instance ToBuilder Flags where
-    toBuilder _ _ (Flags instanceRegistration newIndex anyIndex nonDefCont nbo) = 
+instance ToBuilder (Flags -> Builder) where
+    toBuilder (Flags instanceRegistration newIndex anyIndex nonDefCont nbo) = 
         singleton $ fromListLE [instanceRegistration, newIndex, anyIndex, nonDefCont, nbo]
 
 flagsFromTag :: Word8 -> Flags
@@ -194,11 +194,9 @@ newtype PayloadLenght = PayloadLenght Word32 deriving (Show, Eq)
 
 data VarBind = VarBind OID Value deriving (Show, Eq)
 
-varBindToBuilder :: BigEndian -> VarBind -> Builder
-varBindToBuilder bo (VarBind o v) = 
-     builder16 bo (getType v) <> builder16 bo 0 
-  <> oidToBuilder bo False o 
-  <> valueToBuilder bo v
+instance ToBuilder (BigEndian -> VarBind -> Builder) where
+    toBuilder bo (VarBind o v) = 
+     builder16 bo (getType v) <> builder16 bo 0 <> toBuilder bo False o <> toBuilder bo v
 
 
 builder64 True = putWord64be
@@ -211,40 +209,40 @@ builder16 False = putWord16le
 type Include = Bool
 type BigEndian = Bool
 
-inc :: Include -> Builder
-inc True = singleton 1
-inc False = singleton 0
+instance ToBuilder (Include -> Builder) where
+    toBuilder True = singleton 1
+    toBuilder False = singleton 0
 
-oidToBuilder :: BigEndian -> Include -> OID -> Builder
-oidToBuilder _ _  [] = singleton 0 <> singleton 0 <> singleton 0 <> singleton 0
-oidToBuilder bo i (1:3:6:1:xs) = 
-  singleton (fromIntegral (length xs - 1)) <> singleton (fromIntegral (head xs)) <> inc i <> singleton 0
-  <> (foldl1 (<>) (map (singleton . fromIntegral) (tail xs)))
-oidToBuilder bo i xs = 
-  singleton (fromIntegral (length xs )) <> singleton 0 <> inc i <> singleton 0
-  <> (foldl1 (<>) (map (singleton . fromIntegral) xs))
+instance ToBuilder (BigEndian -> Include -> OID -> Builder) where
+    toBuilder _ _  [] = singleton 0 <> singleton 0 <> singleton 0 <> singleton 0
+    toBuilder bo i (1:3:6:1:xs) = 
+      singleton (fromIntegral (length xs - 1)) <> singleton (fromIntegral (head xs)) <> toBuilder i <> singleton 0
+      <> (foldl1 (<>) (map (singleton . fromIntegral) (tail xs)))
+    toBuilder bo i xs = 
+      singleton (fromIntegral (length xs )) <> singleton 0 <> toBuilder i <> singleton 0
+      <> (foldl1 (<>) (map (singleton . fromIntegral) xs))
 
-bsToBuilder :: BigEndian -> ByteString -> Builder
-bsToBuilder bo bs = builder32 bo (fromIntegral (B.length bs)) <> fromByteString bs <> tailB 
-  where
-  tailB = fromByteString $ B.replicate (fromIntegral tailLen) 0x00
-  tailLen :: Int
-  tailLen = fromIntegral (4 - B.length bs `rem` 4) `rem` 4
+instance ToBuilder (BigEndian -> ByteString -> Builder) where
+    toBuilder bo bs = builder32 bo (fromIntegral (B.length bs)) <> fromByteString bs <> tailB 
+      where
+      tailB = fromByteString $ B.replicate (fromIntegral tailLen) 0x00
+      tailLen :: Int
+      tailLen = fromIntegral (4 - B.length bs `rem` 4) `rem` 4
 
-valueToBuilder :: Bool -> Value -> Builder
-valueToBuilder bo (Snmp.Integer x) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Snmp.Counter32 x) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Snmp.Counter64 x) = builder64 bo $ fromIntegral x
-valueToBuilder bo (Snmp.Gaude32 x) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Snmp.TimeTicks x) = builder32 bo $ fromIntegral x
-valueToBuilder bo (Snmp.OI xs) = oidToBuilder bo False xs
-valueToBuilder bo (Snmp.String xs) = bsToBuilder bo xs
-valueToBuilder bo (Snmp.Opaque xs) = bsToBuilder bo xs
-valueToBuilder bo (Snmp.IpAddress a b c d) = bsToBuilder bo $ B.pack [a,b,c,d]
-valueToBuilder bo (Snmp.Zero) = empty
-valueToBuilder bo (Snmp.NoSuchObject) = empty
-valueToBuilder bo (Snmp.NoSuchInstance) = empty
-valueToBuilder bo (Snmp.EndOfMibView) = empty
+instance ToBuilder (BigEndian -> Value -> Builder) where
+    toBuilder bo (Snmp.Integer x) = builder32 bo $ fromIntegral x
+    toBuilder bo (Snmp.Counter32 x) = builder32 bo $ fromIntegral x
+    toBuilder bo (Snmp.Counter64 x) = builder64 bo $ fromIntegral x
+    toBuilder bo (Snmp.Gaude32 x) = builder32 bo $ fromIntegral x
+    toBuilder bo (Snmp.TimeTicks x) = builder32 bo $ fromIntegral x
+    toBuilder bo (Snmp.OI xs) = toBuilder bo False xs
+    toBuilder bo (Snmp.String xs) = toBuilder bo xs
+    toBuilder bo (Snmp.Opaque xs) = toBuilder bo xs
+    toBuilder bo (Snmp.IpAddress a b c d) = toBuilder bo $ B.pack [a,b,c,d]
+    toBuilder bo (Snmp.Zero) = empty
+    toBuilder bo (Snmp.NoSuchObject) = empty
+    toBuilder bo (Snmp.NoSuchInstance) = empty
+    toBuilder bo (Snmp.EndOfMibView) = empty
 
 
 getType :: Value -> Word16
@@ -268,11 +266,11 @@ getType (Snmp.EndOfMibView) = 130
 
 -- data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
 -- data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext NetworkByteOrder deriving (Show)
-packetToBuilder :: Packet -> Builder
-packetToBuilder (Packet _ p f@(Flags _ _ _ _ nbo) (SessionID sid) (TransactionID tid) (PacketID pid)) =
-    let header = singleton 1 <> singleton (pduToTag p) <> toBuilder undefined undefined f <> singleton 0
-        (body, PayloadLenght l) = pduToBuilder p f
-    in header <> builder32 nbo sid <> builder32 nbo tid <> builder32 nbo pid <> builder32 nbo l <> body
+instance ToBuilder (Packet -> Builder) where
+    toBuilder (Packet _ p f@(Flags _ _ _ _ nbo) (SessionID sid) (TransactionID tid) (PacketID pid)) =
+        let header = singleton 1 <> singleton (pduToTag p) <> toBuilder f <> singleton 0
+            (body, PayloadLenght l) = pduToBuilder p f
+        in header <> builder32 nbo sid <> builder32 nbo tid <> builder32 nbo pid <> builder32 nbo l <> body
 
 pduToBuilder :: PDU -> Flags -> (Builder, PayloadLenght)
 pduToBuilder = undefined
