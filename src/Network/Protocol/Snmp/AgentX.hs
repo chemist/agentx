@@ -27,19 +27,21 @@ data Reason = Other
             | ByManager
             deriving (Show, Eq)
 
-instance Enum Reason where
-    fromEnum Other         = 1
-    fromEnum ParseError    = 2
-    fromEnum ProtocolError = 3
-    fromEnum Timeouts      = 4
-    fromEnum Shutdown      = 5
-    fromEnum ByManager     = 6
-    toEnum 1 = Other        
-    toEnum 2 = ParseError   
-    toEnum 3 = ProtocolError
-    toEnum 4 = Timeouts     
-    toEnum 5 = Shutdown     
-    toEnum 6 = ByManager    
+reasonToTag :: Reason -> Word8
+reasonToTag Other         = 1
+reasonToTag ParseError    = 2
+reasonToTag ProtocolError = 3
+reasonToTag Timeouts      = 4
+reasonToTag Shutdown      = 5
+reasonToTag ByManager     = 6
+
+reasonFromTag :: Word8 -> Reason
+reasonFromTag 1 = Other        
+reasonFromTag 2 = ParseError   
+reasonFromTag 3 = ProtocolError
+reasonFromTag 4 = Timeouts     
+reasonFromTag 5 = Shutdown     
+reasonFromTag 6 = ByManager    
 
 newtype Context = Context ByteString deriving (Show, Eq)
 
@@ -88,35 +90,37 @@ data RError = NoAgentXError
             | ProcessingError
             deriving (Show, Eq)
 
-instance Enum RError where
-    fromEnum NoAgentXError         = 0
-    fromEnum OpenFailed            = 256
-    fromEnum NotOpen               = 257
-    fromEnum IndexWrongType        = 258
-    fromEnum IndexAlreadyAllocated = 259
-    fromEnum IndexNonAvailable     = 260
-    fromEnum IndexNotAllocated     = 261
-    fromEnum UnsupportedContext    = 262
-    fromEnum DuplicateRegistration = 263
-    fromEnum UnknownRegistration   = 264
-    fromEnum UnknownAgentCaps      = 265
-    fromEnum RParseError           = 266
-    fromEnum RequestDenied         = 267
-    fromEnum ProcessingError       = 268
-    toEnum 0   = NoAgentXError        
-    toEnum 256 = OpenFailed           
-    toEnum 257 = NotOpen              
-    toEnum 258 = IndexWrongType       
-    toEnum 259 = IndexAlreadyAllocated
-    toEnum 260 = IndexNonAvailable    
-    toEnum 261 = IndexNotAllocated    
-    toEnum 262 = UnsupportedContext   
-    toEnum 263 = DuplicateRegistration
-    toEnum 264 = UnknownRegistration  
-    toEnum 265 = UnknownAgentCaps     
-    toEnum 266 = RParseError          
-    toEnum 267 = RequestDenied        
-    toEnum 268 = ProcessingError      
+rerrorToTag :: RError -> Word16
+rerrorToTag NoAgentXError         = 0
+rerrorToTag OpenFailed            = 256
+rerrorToTag NotOpen               = 257
+rerrorToTag IndexWrongType        = 258
+rerrorToTag IndexAlreadyAllocated = 259
+rerrorToTag IndexNonAvailable     = 260
+rerrorToTag IndexNotAllocated     = 261
+rerrorToTag UnsupportedContext    = 262
+rerrorToTag DuplicateRegistration = 263
+rerrorToTag UnknownRegistration   = 264
+rerrorToTag UnknownAgentCaps      = 265
+rerrorToTag RParseError           = 266
+rerrorToTag RequestDenied         = 267
+rerrorToTag ProcessingError       = 268
+
+rerrorFromTag :: Word16 -> RError
+rerrorFromTag 0   = NoAgentXError        
+rerrorFromTag 256 = OpenFailed           
+rerrorFromTag 257 = NotOpen              
+rerrorFromTag 258 = IndexWrongType       
+rerrorFromTag 259 = IndexAlreadyAllocated
+rerrorFromTag 260 = IndexNonAvailable    
+rerrorFromTag 261 = IndexNotAllocated    
+rerrorFromTag 262 = UnsupportedContext   
+rerrorFromTag 263 = DuplicateRegistration
+rerrorFromTag 264 = UnknownRegistration  
+rerrorFromTag 265 = UnknownAgentCaps     
+rerrorFromTag 266 = RParseError          
+rerrorFromTag 267 = RequestDenied        
+rerrorFromTag 268 = ProcessingError      
 
 data PDU = Open Timeout OID Description -- 6.2.1
          | Close Reason                 -- 6.2.2
@@ -196,7 +200,7 @@ data VarBind = VarBind OID Value deriving (Show, Eq)
 
 instance ToBuilder (BigEndian -> VarBind -> Builder) where
     toBuilder bo (VarBind o v) = 
-     builder16 bo (getType v) <> builder16 bo 0 <> toBuilder bo False o <> toBuilder bo v
+     builder16 bo (valueToTag v) <> builder16 bo 0 <> toBuilder bo False o <> toBuilder bo v
 
 
 builder64 True = putWord64be
@@ -245,20 +249,20 @@ instance ToBuilder (BigEndian -> Value -> Builder) where
     toBuilder bo (Snmp.EndOfMibView) = empty
 
 
-getType :: Value -> Word16
-getType (Snmp.Integer _) = 2
-getType (Snmp.String _) = 4
-getType (Snmp.Zero) = 5
-getType (Snmp.OI _) = 6
-getType (Snmp.IpAddress _ _ _ _) = 64
-getType (Snmp.Counter32 _) = 65
-getType (Snmp.Gaude32 _) = 66
-getType (Snmp.TimeTicks _) = 67
-getType (Snmp.Opaque _) = 68
-getType (Snmp.Counter64 _) = 70
-getType (Snmp.NoSuchObject) = 128
-getType (Snmp.NoSuchInstance) = 129
-getType (Snmp.EndOfMibView) = 130
+valueToTag :: Value -> Word16
+valueToTag (Snmp.Integer _)         = 2
+valueToTag (Snmp.String _)          = 4
+valueToTag (Snmp.Zero)              = 5
+valueToTag (Snmp.OI _)              = 6
+valueToTag (Snmp.IpAddress _ _ _ _) = 64
+valueToTag (Snmp.Counter32 _)       = 65
+valueToTag (Snmp.Gaude32 _)         = 66
+valueToTag (Snmp.TimeTicks _)       = 67
+valueToTag (Snmp.Opaque _)          = 68
+valueToTag (Snmp.Counter64 _)       = 70
+valueToTag (Snmp.NoSuchObject)      = 128
+valueToTag (Snmp.NoSuchInstance)    = 129
+valueToTag (Snmp.EndOfMibView)      = 130
 
 ----------------------------------------------------------------------------------------------------------------------
 -- Packet 
