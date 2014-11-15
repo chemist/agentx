@@ -235,10 +235,10 @@ instance ToBuilder (BigEndian -> ByteString -> Builder) where
 
 instance ToBuilder (BigEndian -> Value -> Builder) where
     toBuilder bo (Snmp.Integer x) = builder32 bo $ fromIntegral x
-    toBuilder bo (Snmp.Counter32 x) = builder32 bo $ fromIntegral x
-    toBuilder bo (Snmp.Counter64 x) = builder64 bo $ fromIntegral x
-    toBuilder bo (Snmp.Gaude32 x) = builder32 bo $ fromIntegral x
-    toBuilder bo (Snmp.TimeTicks x) = builder32 bo $ fromIntegral x
+    toBuilder bo (Snmp.Counter32 x) = builder32 bo x
+    toBuilder bo (Snmp.Counter64 x) = builder64 bo x
+    toBuilder bo (Snmp.Gaude32 x) = builder32 bo x
+    toBuilder bo (Snmp.TimeTicks x) = builder32 bo x
     toBuilder bo (Snmp.OI xs) = toBuilder bo False xs
     toBuilder bo (Snmp.String xs) = toBuilder bo xs
     toBuilder bo (Snmp.Opaque xs) = toBuilder bo xs
