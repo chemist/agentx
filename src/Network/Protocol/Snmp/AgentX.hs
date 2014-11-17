@@ -4,6 +4,7 @@ module Network.Protocol.Snmp.AgentX where
 import Data.Word
 import Data.Binary
 import Data.Binary.Put (putBuilder)
+import Data.Binary.Get 
 import Data.Binary.Builder
 import Network.Protocol.Snmp (Value(..), OID)
 import qualified Network.Protocol.Snmp as Snmp
@@ -353,4 +354,33 @@ bodyLength = PayloadLenght . fromIntegral . BL.length . toLazyByteString
 instance ToBuilder (BigEndian -> Maybe Context -> Builder) where
     toBuilder _ Nothing = empty
     toBuilder bi (Just (Context c)) = toBuilder bi c
+
+-----------------------------------------------------------------------------------------------------------
+-- binary 
+-----------------------------------------------------------------------------------------------------------
+
+instance Binary Packet where
+    put = putBuilder . toBuilder 
+    get = do
+        version <- getWord8 
+        pduTag <- getWord8
+        flags <- flagsFromTag <$> getWord8
+        _reserved <- getWord8
+        sid <- if (bigEndian flags) then getWord32be else getWord32le
+        tid <- if (bigEndian flags) then getWord32be else getWord32le
+        pid <- if (bigEndian flags) then getWord32be else getWord32le
+        bodySize <- if (bigEndian flags) then getWord32be else getWord32le
+        pdu <- parsePdu pduTag flags bodySize
+        return $ Packet version pdu flags (SessionID sid) (TransactionID tid) (PacketID pid)
+
+type Size = Word32
+
+parsePdu :: Word8 -> Flags -> Size -> Get PDU
+parsePdu t f s 
+    | t == 9 = return $ CommitSet 
+    | t == 10 = return $ UndoSet
+    | t == 11 = return $ CleanupSet
+
+bigEndian :: Flags -> Bool
+bigEndian (Flags _ _ _ _ x) = x
 
