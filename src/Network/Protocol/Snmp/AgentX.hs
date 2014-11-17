@@ -9,10 +9,12 @@ import Network.Protocol.Snmp (Value(..), OID)
 import qualified Network.Protocol.Snmp as Snmp
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Control.Applicative hiding (empty)
 import Data.Monoid
 import Data.Bits
 import Data.Bits.Bitwise (fromListLE, toListLE)
+import Data.Maybe (fromMaybe)
 
 data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
 
@@ -126,7 +128,7 @@ data PDU = Open Timeout OID Description -- 6.2.1
          | Close Reason                 -- 6.2.2
          | Register   (Maybe Context) Timeout Priority RangeSubid SubTree (Maybe UpperBound) -- 6.2.3
          | Unregister (Maybe Context)         Priority RangeSubid SubTree (Maybe UpperBound) -- 6.2.4
-         | Get        (Maybe Context) [SearchRange] -- 6.2.5
+         | Get        (Maybe Context) [OID] -- 6.2.5
          | GetNext    (Maybe Context) [SearchRange] -- 6.2.6
          | GetBulk    (Maybe Context) NonRepeaters MaxRepeaters [SearchRange] -- 6.2.7
          | TestSet    (Maybe Context) [VarBind]  -- 6.2.8
@@ -139,7 +141,7 @@ data PDU = Open Timeout OID Description -- 6.2.1
          | IndexDeallocate (Maybe Context) [VarBind] -- 6.2.13
          | AddAgentCaps    (Maybe Context) OID Description  -- 6.2.14
          | RemoveAgentCaps (Maybe Context) OID  -- 6.2.15
-         | Response   SysUptime RError Index (Maybe VarBind) -- 6.2.16
+         | Response   SysUptime RError Index [VarBind] -- 6.2.16
          deriving (Show, Eq)
 
 pduToTag :: PDU -> Word8
@@ -268,8 +270,6 @@ valueToTag (Snmp.EndOfMibView)      = 130
 -- Packet 
 ----------------------------------------------------------------------------------------------------------------------
 
--- data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
--- data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext NetworkByteOrder deriving (Show)
 instance ToBuilder (Packet -> Builder) where
     toBuilder (Packet _ p f@(Flags _ _ _ _ nbo) (SessionID sid) (TransactionID tid) (PacketID pid)) =
         let header = singleton 1 <> singleton (pduToTag p) <> toBuilder f <> singleton 0
@@ -277,4 +277,80 @@ instance ToBuilder (Packet -> Builder) where
         in header <> builder32 nbo sid <> builder32 nbo tid <> builder32 nbo pid <> builder32 nbo l <> body
 
 pduToBuilder :: PDU -> Flags -> (Builder, PayloadLenght)
-pduToBuilder = undefined
+pduToBuilder (Open (Timeout t) o (Description d)) (Flags _ _ _ _ bi)  =
+    let body = singleton t <> singleton 0 <> singleton 0 <> singleton 0
+             <> toBuilder bi False o <> toBuilder bi d
+    in (body, bodyLength body)
+pduToBuilder (Close r) (Flags _ _ _ _ bi)  =
+    let body = singleton (reasonToTag r) <> singleton 0 <> singleton 0 <> singleton 0
+    in (body, PayloadLenght 4)
+pduToBuilder (Register mc (Timeout t) (Priority p) (RangeSubid r) s mu) (Flags _ _ _ _ bi) =  --TODO ? INSTANCE_REGISTRATION
+    let upperBound = case (r, mu) of
+                          (0, _) -> empty
+                          (_, Just (UpperBound u)) -> builder32 bi u
+        body = toBuilder bi mc 
+            <> singleton t <> singleton p <> singleton r <> singleton 0
+            <> toBuilder bi False s
+            <> upperBound
+    in (body, bodyLength body)
+pduToBuilder (Unregister mc (Priority p) (RangeSubid r) s mu) (Flags _ _ _ _ bi)  =
+    let upperBound = case (r, mu) of
+                          (0, _) -> empty
+                          (_, Just (UpperBound u)) -> builder32 bi u
+        body = toBuilder bi mc
+            <> singleton 0 <> singleton p <> singleton r <> singleton 0
+            <> toBuilder bi False s
+            <> upperBound
+    in (body, bodyLength body)
+pduToBuilder (Get mc sr) (Flags _ _ _ _ bi)  =
+    let searchRangeList = Prelude.foldr (\a b -> toBuilder bi True a <> toBuilder bi False ([] :: OID)  <> b) empty sr
+        body = toBuilder bi mc  <> searchRangeList
+    in (body, bodyLength body)
+pduToBuilder (GetNext mc sr) (Flags _ _ _ _ bi)  =
+    let searchRangeList = Prelude.foldr (\(SearchRange (s,e)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
+        body = toBuilder bi mc <> searchRangeList
+    in (body, bodyLength body)
+pduToBuilder (GetBulk mc (NonRepeaters nr) (MaxRepeaters mr) sr) (Flags _ _ _ _ bi)  =
+    let searchRangeList = Prelude.foldr (\(SearchRange (s,e)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
+        body = toBuilder bi mc
+            <> builder16 bi nr <> builder16 bi mr
+            <> searchRangeList
+    in (body, bodyLength body)
+pduToBuilder (TestSet mc vb) (Flags _ _ _ _ bi)  =
+    let vbl = Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+        body = toBuilder bi mc <> vbl
+    in (body, bodyLength body)
+pduToBuilder CommitSet _  = (empty, PayloadLenght 0)
+pduToBuilder UndoSet _  = (empty, PayloadLenght 0)
+pduToBuilder CleanupSet _  = (empty, PayloadLenght 0)
+pduToBuilder (Notify mc vb) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+    in (body, bodyLength body)
+pduToBuilder (Ping mc) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc
+    in (body, bodyLength body)
+pduToBuilder (IndexAllocate mc vb) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+    in (body, bodyLength body)
+pduToBuilder (IndexDeallocate mc vb) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+    in (body, bodyLength body)
+pduToBuilder (AddAgentCaps mc o (Description d)) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> toBuilder bi False o <> toBuilder bi d
+    in (body, bodyLength body)
+pduToBuilder (RemoveAgentCaps mc o) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> toBuilder bi False o
+    in (body, bodyLength body)
+pduToBuilder (Response (SysUptime su) re (Index i) vb) (Flags _ _ _ _ bi)  =
+    let body = builder32 bi su
+            <> builder16 bi (rerrorToTag re) <> builder16 bi i
+            <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+    in (body, bodyLength body)
+
+bodyLength :: Builder -> PayloadLenght
+bodyLength = PayloadLenght . fromIntegral . BL.length . toLazyByteString
+
+instance ToBuilder (BigEndian -> Maybe Context -> Builder) where
+    toBuilder _ Nothing = empty
+    toBuilder bi (Just (Context c)) = toBuilder bi c
+
