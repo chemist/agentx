@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Data.Word
@@ -16,6 +17,10 @@ import Data.Monoid
 import Data.Bits
 import Data.Bits.Bitwise (fromListLE, toListLE)
 import Data.Maybe (fromMaybe)
+import Debug.Trace
+import Network.Socket
+import Network.Socket.ByteString.Lazy
+import Prelude hiding (getContents)
 
 data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
 
@@ -222,12 +227,15 @@ instance ToBuilder (Include -> Builder) where
 
 instance ToBuilder (BigEndian -> Include -> OID -> Builder) where
     toBuilder _ _  [] = singleton 0 <> singleton 0 <> singleton 0 <> singleton 0
+    toBuilder bo i (1:3:6:1:[]) =  -- Not clearly in rfc!!!
+      singleton 4 <> singleton 0 <> toBuilder i <> singleton 0
+      <> mconcat (map (builder32 bo . fromIntegral) [1,3,6,1])
     toBuilder bo i (1:3:6:1:xs) = 
       singleton (fromIntegral (length xs - 1)) <> singleton (fromIntegral (head xs)) <> toBuilder i <> singleton 0
-      <> (foldl1 (<>) (map (singleton . fromIntegral) (tail xs)))
+      <> mconcat (map (builder32 bo . fromIntegral) (tail xs))
     toBuilder bo i xs = 
       singleton (fromIntegral (length xs )) <> singleton 0 <> toBuilder i <> singleton 0
-      <> (foldl1 (<>) (map (singleton . fromIntegral) xs))
+      <> mconcat (map (builder32 bo . fromIntegral) xs)
 
 instance ToBuilder (BigEndian -> ByteString -> Builder) where
     toBuilder bo bs = builder32 bo (fromIntegral (B.length bs)) <> fromByteString bs <> tailB 
@@ -375,12 +383,99 @@ instance Binary Packet where
 
 type Size = Word32
 
+getDescription :: BigEndian -> Get Description
+getDescription bo = do
+    l <- fromIntegral <$> if bo then getWord32be else getWord32le
+    let fullLength = l + 4 - (l `rem` 4)
+    s <- getByteString fullLength
+    return $ Description (B.take l s)
+
+getOid :: BigEndian -> Get OID
+getOid bo = do
+    nSubId <- getWord8
+    prefix <- getWord8
+    include <- getWord8
+    _reserved <- getWord8
+    end <- sequence $ replicate (fromIntegral nSubId) (if bo then getWord32be else getWord32le)
+    case (nSubId, prefix) of
+         (0, 0) -> return []
+         (_, 0) -> return $ map fromIntegral end
+         (_, x) -> return $ [1,3,6,1] <> map fromIntegral (fromIntegral x:end)
+
 parsePdu :: Word8 -> Flags -> Size -> Get PDU
 parsePdu t f s 
+    | t == 1 = do
+        -- Open
+        time <- Timeout <$> getWord8
+        _reserved <- getWord8
+        _reserved <- getWord8
+        _reserved <- getWord8
+        o <- getOid (bigEndian f)
+        d <- getDescription (bigEndian f)
+        return $ Open time o d
+    | t == 2 = do
+        -- Close
+        reason <- reasonFromTag <$> getWord8
+        _reserved <- getWord8
+        _reserved <- getWord8
+        _reserved <- getWord8
+        return $ Close reason
+    | t == 3 = do
+        -- Register
+        return undefined
+    | t == 4 = do
+        -- Unregister
+        return undefined
+    | t == 5 = do
+        -- Get
+        return undefined
+    | t == 6 = do
+        -- GetNext
+        return undefined
+    | t == 7 = do
+        -- GetBulk
+        return undefined
+    | t == 8 = do
+        -- TestSet
+        return undefined
     | t == 9 = return $ CommitSet 
     | t == 10 = return $ UndoSet
     | t == 11 = return $ CleanupSet
+    | t == 12 = do
+        -- Notify
+        return undefined
+    | t == 13 = do
+        -- Ping
+        return undefined
+    | t == 14 = do
+        -- IndexAllocate
+        return undefined
+    | t == 15 = do
+        -- IndexDeallocate
+        return undefined
+    | t == 16 = do
+        -- AddAgentCaps
+        return undefined
+    | t == 17 = do
+        -- RemoveAgentCaps
+        return undefined
+    | t == 18 = do
+        -- Response
+        return undefined
 
 bigEndian :: Flags -> Bool
 bigEndian (Flags _ _ _ _ x) = x
 
+main :: IO ()
+main = do
+    sock <- socket AF_UNIX Stream 0
+    connect sock (SockAddrUnix "/var/agentx/master")
+    let p1 = Register Nothing (Timeout 200) (Priority 0) (RangeSubid 0) [1,3,6,1,4,1,44729,1] Nothing
+    let p2 = IndexAllocate Nothing [VarBind [1,3,6,1,4,1,44729,1] (String "hello")]
+    let p3 = Ping Nothing
+    sendAll sock (encode $ Packet 1 p3 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
+    sendAll sock (encode $ Packet 1 p1 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
+    sendAll sock (encode $ Packet 1 p2 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
+    sendAll sock (encode $ Packet 1 p3 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
+    print =<< getContents sock
+    print "open socket"
