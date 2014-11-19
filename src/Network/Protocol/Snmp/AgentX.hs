@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE BangPatterns #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Data.Word
@@ -18,8 +19,9 @@ import Data.Bits
 import Data.Bits.Bitwise (fromListLE, toListLE)
 import Data.Maybe (fromMaybe)
 import Debug.Trace
-import Network.Socket
+import Network.Socket hiding (recv)
 import Network.Socket.ByteString.Lazy
+import Data.Int
 import Prelude hiding (getContents)
 
 data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
@@ -218,6 +220,13 @@ builder32 False = putWord32le
 builder16 True = putWord16be
 builder16 False = putWord16le
 
+get16 True = getWord16be
+get16 False = getWord16le
+get32 True = getWord32be
+get32 False = getWord32le
+get64 True = getWord64be
+get64 False = getWord64le
+
 type Include = Bool
 type BigEndian = Bool
 
@@ -258,6 +267,26 @@ instance ToBuilder (BigEndian -> Value -> Builder) where
     toBuilder bo (Snmp.NoSuchObject) = empty
     toBuilder bo (Snmp.NoSuchInstance) = empty
     toBuilder bo (Snmp.EndOfMibView) = empty
+
+getValue :: BigEndian -> Word16 -> Get Value
+getValue bo 2 = Integer . fromIntegral <$> get32 bo
+getValue bo 4 = String <$> getString bo
+getValue bo 5 = return Zero
+getValue bo 6 = OI <$> getOid bo
+getValue bo 64 = do
+    a <- getWord8
+    b <- getWord8
+    c <- getWord8
+    d <- getWord8
+    return $ IpAddress a b c d
+getValue bo 65 = Counter32 <$> get32 bo
+getValue bo 66 = Gaude32 <$> get32 bo
+getValue bo 67 = TimeTicks <$> get32 bo
+getValue bo 68 = Opaque <$> getString bo
+getValue bo 70 = Counter64 <$> get64 bo
+getValue bo 128 = return NoSuchObject
+getValue bo 129 = return NoSuchInstance
+getValue bo 130 = return EndOfMibView
 
 
 valueToTag :: Value -> Word16
@@ -360,7 +389,7 @@ bodyLength :: Builder -> PayloadLenght
 bodyLength = PayloadLenght . fromIntegral . BL.length . toLazyByteString
 
 instance ToBuilder (BigEndian -> Maybe Context -> Builder) where
-    toBuilder _ Nothing = empty
+    toBuilder _ Nothing = builder32 True 0
     toBuilder bi (Just (Context c)) = toBuilder bi c
 
 -----------------------------------------------------------------------------------------------------------
@@ -374,21 +403,15 @@ instance Binary Packet where
         pduTag <- getWord8
         flags <- flagsFromTag <$> getWord8
         _reserved <- getWord8
-        sid <- if (bigEndian flags) then getWord32be else getWord32le
-        tid <- if (bigEndian flags) then getWord32be else getWord32le
-        pid <- if (bigEndian flags) then getWord32be else getWord32le
-        bodySize <- if (bigEndian flags) then getWord32be else getWord32le
+        sid <- get32 (bigEndian flags) 
+        tid <- get32 (bigEndian flags) 
+        pid <- get32 (bigEndian flags) 
+        bodySize <- get32 (bigEndian flags) 
         pdu <- parsePdu pduTag flags bodySize
         return $ Packet version pdu flags (SessionID sid) (TransactionID tid) (PacketID pid)
 
 type Size = Word32
 
-getDescription :: BigEndian -> Get Description
-getDescription bo = do
-    l <- fromIntegral <$> if bo then getWord32be else getWord32le
-    let fullLength = l + 4 - (l `rem` 4)
-    s <- getByteString fullLength
-    return $ Description (B.take l s)
 
 getOid :: BigEndian -> Get OID
 getOid bo = do
@@ -396,11 +419,44 @@ getOid bo = do
     prefix <- getWord8
     include <- getWord8
     _reserved <- getWord8
-    end <- sequence $ replicate (fromIntegral nSubId) (if bo then getWord32be else getWord32le)
+    end <- sequence $ replicate (fromIntegral nSubId) (get32 bo)
     case (nSubId, prefix) of
          (0, 0) -> return []
          (_, 0) -> return $ map fromIntegral end
          (_, x) -> return $ [1,3,6,1] <> map fromIntegral (fromIntegral x:end)
+
+getString :: BigEndian -> Get ByteString
+getString bo = do
+    l <- fromIntegral <$> get32 bo
+    let fullLength = l + (4 - l `rem` 4) `rem` 4
+    s <- getByteString fullLength
+    return $ B.take l s
+        
+getDescription :: BigEndian -> Get Description
+getDescription bo = Description <$> getString bo
+
+getContext :: BigEndian -> Get (Maybe Context)
+getContext bo = do
+    s <- getString bo
+    case s of
+         "" -> return Nothing
+         _ -> return (Just (Context s))
+
+getVarBind :: BigEndian -> Get VarBind
+getVarBind bo = do
+    valueTag <- get16 bo 
+    _reserved <- getWord16be
+    oi <- getOid bo
+    v <- getValue bo valueTag 
+    return $ VarBind oi v
+
+getVarBindList :: BigEndian -> [VarBind] -> Get [VarBind]
+getVarBindList bo xs = do
+    vb <- getVarBind bo
+    isEnd <- isEmpty
+    case isEnd of
+         True -> return $ reverse (vb:xs)
+         False -> getVarBindList bo (vb:xs)
 
 parsePdu :: Word8 -> Flags -> Size -> Get PDU
 parsePdu t f s 
@@ -422,60 +478,89 @@ parsePdu t f s
         return $ Close reason
     | t == 3 = do
         -- Register
-        return undefined
+        context <- getContext (bigEndian f)
+        timeout <- Timeout <$> getWord8
+        priority <- Priority <$> getWord8
+        rsid <- RangeSubid <$> getWord8
+        _reserved <- getWord8
+        oid <- getOid (bigEndian f)
+        case rsid of
+             RangeSubid 0x00 -> return $ Register context timeout priority rsid oid Nothing
+             _ -> Register context timeout priority rsid oid . Just <$> UpperBound <$> get32 (bigEndian f)
     | t == 4 = do
         -- Unregister
-        return undefined
+        fail "unregister"
     | t == 5 = do
         -- Get
-        return undefined
+        fail "get"
     | t == 6 = do
         -- GetNext
-        return undefined
+        fail "getnext"
     | t == 7 = do
         -- GetBulk
-        return undefined
+        fail "getbulk"
     | t == 8 = do
         -- TestSet
-        return undefined
+        fail "testset"
     | t == 9 = return $ CommitSet 
     | t == 10 = return $ UndoSet
     | t == 11 = return $ CleanupSet
     | t == 12 = do
+        c <- getContext (bigEndian f)
         -- Notify
-        return undefined
+        fail "notify"
     | t == 13 = do
         -- Ping
-        return undefined
+        fail "ping"
     | t == 14 = do
         -- IndexAllocate
-        return undefined
+        fail "indexallocate"
     | t == 15 = do
         -- IndexDeallocate
-        return undefined
+        fail "indexdeallocate"
     | t == 16 = do
         -- AddAgentCaps
-        return undefined
+        fail "addagentcaps"
     | t == 17 = do
         -- RemoveAgentCaps
-        return undefined
+        fail "removeagentcaps"
     | t == 18 = do
         -- Response
-        return undefined
+        sysUptime <- SysUptime <$> get32 (bigEndian f) 
+        rerror <- rerrorFromTag <$> get16 (bigEndian f) 
+        index <- Index <$> get16 (bigEndian f) 
+        vbl <- getVarBindList (bigEndian f) [] 
+        return $ Response sysUptime rerror index vbl
 
 bigEndian :: Flags -> Bool
 bigEndian (Flags _ _ _ _ x) = x
+
+sessionId :: Packet -> SessionID
+sessionId (Packet _ _ _ x _ _) = x
 
 main :: IO ()
 main = do
     sock <- socket AF_UNIX Stream 0
     connect sock (SockAddrUnix "/var/agentx/master")
-    let p1 = Register Nothing (Timeout 200) (Priority 0) (RangeSubid 0) [1,3,6,1,4,1,44729,1] Nothing
-    let p2 = IndexAllocate Nothing [VarBind [1,3,6,1,4,1,44729,1] (String "hello")]
-    let p3 = Ping Nothing
-    sendAll sock (encode $ Packet 1 p3 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
-    sendAll sock (encode $ Packet 1 p1 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
-    sendAll sock (encode $ Packet 1 p2 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
-    sendAll sock (encode $ Packet 1 p3 (Flags True True True True True) (SessionID 1) (TransactionID 1) (PacketID 1))
-    print =<< getContents sock
-    print "open socket"
+    let open = Open (Timeout 200) [1,3,6,1,4,1,8072,3,2,255] (Description "Haskell AgentX sub-aagent")
+        register = Register Nothing (Timeout 0) (Priority 127) (RangeSubid 0) [1,3,6,1,4,1,44729,1] Nothing 
+    sendAll sock (encode $ Packet 1 open (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 1))
+    -- for lazy wait more big chunk then i have, and here i fix size for recv
+    h <- recv sock 20
+    b <- recv sock (getBodySizeFromHeader h)
+    let p = decode (h <> b) :: Packet
+    print p
+    sendAll sock (encode $ Packet 1 register (Flags False False False True False) (sessionId p) (TransactionID 1) (PacketID 2))
+    h <- recv sock 20
+    b <- recv sock (getBodySizeFromHeader h)
+    let p = decode (h <> b) :: Packet
+    print p
+    print "end"
+
+getBodySizeFromHeader :: BL.ByteString -> Int64
+getBodySizeFromHeader bs =
+    let flags = flagsFromTag (BL.index bs 2)
+        bo = bigEndian flags
+        s = BL.drop 16 bs
+    in fromIntegral $ runGet (get32 bo) s
+
