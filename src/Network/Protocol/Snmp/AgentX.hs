@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Network.Socket hiding (recv)
@@ -6,13 +7,59 @@ import Network.Socket.ByteString.Lazy
 import Data.Binary
 import Data.Monoid
 import Control.Monad (forever)
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.ByteString (ByteString)
+import Control.Monad.State
+import Data.Time
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Types
 import Debug.Trace
 
-main :: IO ()
-main = do
+type Reaction m = Packet -> m Packet
+type Handlers m = Reaction m -> Reaction m
+
+data Request = SGet OID
+             | SSet OID Value
+             deriving (Show, Eq)
+
+type AgentFun = IO Value
+
+data AgentXState m = AgentXState
+  { handlers :: [Handlers m]
+  , sysuptime :: SysUptime
+  , packetCounter :: PacketID
+  , name :: ByteString
+  , sock :: Socket
+  }
+
+newtype AgentX m a = AgentX { runAgentX :: StateT (AgentXState m) m a} deriving (Monad, Functor, MonadIO)
+
+addHandler :: Handlers m -> AgentXState m -> AgentXState m 
+addHandler h s = s { handlers = h : (handlers s) }
+
+addRequest :: Request -> AgentFun -> Reaction m
+addRequest (SGet oi) f (Packet _ (Get mc xs) flags sid tid pid) = 
+    if elem oi xs
+       then undefined
+       else error "not found"
+
+-- get :: OID -> IO Value -> AgentX IO ()
+get oi f = addRequest (SGet oi) f
+
+subagent :: ByteString -> Socket -> AgentX IO () -> IO ()
+subagent name socket app =
+    let st = AgentXState [] (SysUptime 0) (PacketID 1) name socket
+    in (evalStateT . runAgentX) app st
+
+work :: AgentX IO ()
+work = do
+    undefined
+    -- addRequest (SGet [1,3,6,1,4,5])  undefined
+
+check :: IO ()
+check = do
     sock <- socket AF_UNIX Stream 0
     connect sock (SockAddrUnix "/var/agentx/master")
     let open = Open (Timeout 200) [1,3,6,1,4,1,44729,0] (Description "Haskell AgentX sub-aagent")
