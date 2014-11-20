@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Network.Socket hiding (recv)
@@ -11,14 +12,15 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.ByteString (ByteString)
 import Control.Monad.State
+import Control.Monad.Reader
 import Data.Time
+import Control.Applicative
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Types
 import Debug.Trace
 
 type Reaction m = Packet -> m Packet
-type Handlers m = Reaction m -> Reaction m
 
 data Request = SGet OID
              | SSet OID Value
@@ -27,36 +29,103 @@ data Request = SGet OID
 type AgentFun = IO Value
 
 data AgentXState m = AgentXState
-  { handlers :: [Handlers m]
-  , sysuptime :: SysUptime
+  { sysuptime :: SysUptime
   , packetCounter :: PacketID
   , name :: ByteString
   , sock :: Socket
   }
 
-newtype AgentX m a = AgentX { runAgentX :: StateT (AgentXState m) m a} deriving (Monad, Functor, MonadIO)
+newtype AgentT s m a = AgentT
+  { runAgentT :: s -> Packet -> m (Either Packet a, s) }
 
-addHandler :: Handlers m -> AgentXState m -> AgentXState m 
-addHandler h s = s { handlers = h : (handlers s) }
+instance Functor m =>  Functor (AgentT s m) where
+    fmap f (AgentT act) = AgentT $ \st0 req ->
+        go `fmap` act st0 req
+        where
+          go (eaf, st) = case eaf of
+                              Left resp -> (Left resp, st)
+                              Right result -> (Right $ f result, st)
 
-addRequest :: Request -> AgentFun -> Reaction m
-addRequest (SGet oi) f (Packet _ (Get mc xs) flags sid tid pid) = 
-    if elem oi xs
-       then undefined
-       else error "not found"
+instance Monad m =>  Monad (AgentT s m) where
+    return a = AgentT $ \st _ -> return $ (Right a, st)
+    (AgentT act) >>= fun = AgentT $ \st0 req -> do
+        (eres, st) <-  act st0 req
+        case eres of
+             Left resp -> return (Left resp, st)
+             Right result -> do
+                 let (AgentT fres) = fun result
+                 fres st req
 
--- get :: OID -> IO Value -> AgentX IO ()
-get oi f = addRequest (SGet oi) f
+instance (Monad m, Functor m) =>  Applicative (AgentT s m) where
+    pure = return
+    (<*>) = ap
 
-subagent :: ByteString -> Socket -> AgentX IO () -> IO ()
-subagent name socket app =
-    let st = AgentXState [] (SysUptime 0) (PacketID 1) name socket
-    in (evalStateT . runAgentX) app st
+instance (Functor m, Monad m) => Alternative (AgentT s m) where
+      empty = respond notFound
+      (<|>) = (>>)
 
-work :: AgentX IO ()
-work = do
-    undefined
-    -- addRequest (SGet [1,3,6,1,4,5])  undefined
+instance MonadTrans (AgentT s) where
+    lift act = AgentT $ \st _ -> act >>= \r -> return (Right r, st)
+
+instance MonadIO m => MonadIO (AgentT s m) where
+    liftIO = lift . liftIO
+
+instance Monad m => MonadReader Packet (AgentT s m) where
+    ask = AgentT $ \st req -> return (Right req, st)
+    local f (AgentT act) = AgentT $ \st req -> act st (f req)
+
+request :: Monad m => AgentT s m Packet
+request = ask
+
+hoistEither :: Monad m => Either Packet a -> AgentT s m a
+hoistEither eith = AgentT $ \st _ -> return (eith, st)
+
+respond :: Monad m =>  Packet -> AgentT s m a
+respond resp = hoistEither $ Left resp
+
+
+notFound = error "notFound"
+
+agentTReaction :: Monad m => s -> AgentT s m a -> Reaction m
+agentTReaction s agent req =
+      runAgentT agent s req >>=
+              either return (const $ return notFound) . fst
+
+fromReaction :: Monad m => (Packet -> m Packet) -> AgentT s m ()
+fromReaction app = do
+    req <-  request
+    resp <- lift $ app req
+    respond resp
+
+defFlags = Flags False False False False False
+pdu = Ping Nothing
+
+fun1 (Packet v pdu defFlags (SessionID 1) (TransactionID 1) (PacketID 1))
+  | v == 1 = return $ (Packet 1 pdu defFlags (SessionID 1) (TransactionID 1) (PacketID 1))
+  | otherwise = fail "not found"
+
+fun2 (Packet v pdu defFlags (SessionID 1) (TransactionID 1) (PacketID 1)) 
+  | v == 2 = return $ (Packet 2 pdu defFlags (SessionID 1) (TransactionID 1) (PacketID 1))
+  | otherwise = fail "not found"
+
+fun3 (Packet v pdu defFlags (SessionID 1) (TransactionID 1) (PacketID 1)) 
+  | v == 3 = return $ (Packet 3 pdu defFlags (SessionID 1) (TransactionID 1) (PacketID 1))
+  | otherwise = fail "not found"
+
+getV (Packet v _ _ _ _ _) = v
+
+routeVersion :: Monad m => Word8 -> AgentT s m a -> AgentT s m ()
+routeVersion v x = do
+    r <-  ask
+    if v == (getV r) then x >> return () else return ()
+
+
+
+allFun :: Reaction IO
+allFun = agentTReaction () $ do
+    routeVersion 1 $ fromReaction fun1
+    routeVersion 2 $ fromReaction fun2
+    routeVersion 3 $ fromReaction fun3
 
 check :: IO ()
 check = do
