@@ -36,3 +36,28 @@ Packet 1 (Response (SysUptime 4349) NoAgentXError (Index 0) [VarBind [1,3,6,1,2,
 EB 75 00 00  01 00 00 00  01 00 00 00  05 00 00 00
 
 
+Subagent -> Master
+Packet 1 (Ping Nothing) (Flags False False False False False) (SessionID 5) (TransactionID 0) (PacketID 1175464725)
+
+01 0D 00 00  05 00 00 00  00 00 00 00  15 2B 10 46
+00 00 00 00                                       
+
+Master -> Subagent
+Packet 1 (Response (SysUptime 5849) NoAgentXError (Index 0) []) (Flags False False False False False) (SessionID 5) (TransactionID 0) (PacketID 1175464725)
+
+01 12 00 00  05 00 00 00  00 00 00 00  15 2B 10 46
+08 00 00 00  D9 16 00 00  00 00 00 00             
+
+Subagent -> Master
+Packet 1 (Close Shutdown) (Flags False False False False False) (SessionID 5) (TransactionID 0) (PacketID 1175464728)
+
+01 02 00 00  05 00 00 00  00 00 00 00  18 2B 10 46
+04 00 00 00  05 00 00 00                          
+
+Master -> Subagent
+Packet 1 (Response (SysUptime 9295) NoAgentXError (Index 0) []) (Flags False False False False False) (SessionID 5) (TransactionID 0) (PacketID 1175464728)
+
+01 12 00 00  05 00 00 00  00 00 00 00  18 2B 10 46
+08 00 00 00  4F 24 00 00  00 00 00 00             
+
+
