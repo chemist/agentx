@@ -28,6 +28,8 @@ library
                      , containers
                      , mtl
                      , time
+                     , network-info
+                     , template-haskell
   hs-source-dirs:      src
   default-language:    Haskell2010
 
