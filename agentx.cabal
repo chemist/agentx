@@ -29,7 +29,7 @@ library
                      , mtl
                      , time
                      , network-info
-                     , template-haskell
+                     , rosezipper
   hs-source-dirs:      src
   default-language:    Haskell2010
 

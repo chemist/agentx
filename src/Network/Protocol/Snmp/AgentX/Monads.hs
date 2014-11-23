@@ -11,14 +11,11 @@ import Control.Monad (forever)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.ByteString (ByteString)
-import Data.ByteString.Char8 (pack)
 import Control.Monad.State
 import Control.Monad.Reader
 import Data.Time
-import Data.Time.Clock.POSIX
-import Data.Fixed
 import Control.Applicative
-import Network.Info
+import Data.Tree
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Types
@@ -28,18 +25,28 @@ type Reaction m = Packet -> m Packet
 
 data Base = Base OID String Values
 
-data Generator = Generator String Integer Values
+data Values = Values OID String Value Update deriving (Show)
 
-data Values = Object String Integer [Values] Update
-            | ObjectType Integer String Value Update
-            | ZeroValues
+type ATree = Tree Values
+
+data Generator = Generator String Integer Values
 
 data Update = Up
             | Fixed
-            | Update (IO Values, Maybe ([VarBind] -> IO Bool))
+            | Update (IO ATree, Maybe ([VarBind] -> IO Bool))
+
+base :: OID -> String -> ATree
+base oid name = Node (Values oid name Zero Fixed) []
+
+leaf :: Integer -> String -> Value -> Update -> ATree 
+leaf i name v fs = Node (Values [i] name v fs) []
+
+root :: ATree -> [ATree] -> ATree
+root base' leafs = base' { subForest = leafs }
 
 instance Show Update where
     show Up = "up"
+    show Fixed = "constant"
     show (Update (_, Nothing)) = "read-only"
     show (Update (_, Just _)) = "read-write"
 
@@ -48,42 +55,7 @@ instance Show Base where
         oidToString oi <> " " <> n <>  "\n"
         <> "  " <> show v
 
-instance Show Values where
-    show ZeroValues = "zero"
-    show (Object n i v u) = show i <> " " <> n <> " " <> show u <>  "\n" <> showL v
-      where 
-      showL xs = init $ concatMap (\x -> "    " <> x <> "\n") $ map show xs
-    show (ObjectType i n v u) = "  " <> show i <> " " <> n  <> " " <> show v <>  " " <> show u
-
 oidToString xs = init $ foldr (\a b -> show a <> "." <> b) "" xs
-
-{--
- i need something like:
-base 1.3.6.1.4.1.44729 Fixmon
-object top 0
-  object middle 0
-    object-type name  0 (String "current time")
-    object-type time  1 GenerateTime
-  object interfaces 1 GenerateInterfaces
---}
-
-generateTime :: IO Values
-generateTime = do
-    t <- flip div' 1 <$> getPOSIXTime
-    return $ ObjectType 1 "time" (TimeTicks (fromIntegral t)) (Update (generateTime, Nothing))
-
-generateInterfaces :: IO Values 
-generateInterfaces = do
-    nx <- getNetworkInterfaces
-    let iToO x = [ ObjectType 0 "index" (Integer 0) Up
-                 , ObjectType 1 "name" (String $ pack $ Network.Info.name x) Up
-                 , ObjectType 2 "ipv4" (String $ pack . show $ Network.Info.ipv4 x) Up
-                 , ObjectType 3 "ipv6" (String $ pack . show $ Network.Info.ipv6 x) Up
-                 , ObjectType 4 "mac" (String $ pack . show $ Network.Info.mac x) Up
-                 ]
-    return $ Object "interfaces" 1 (map (\(o, i) -> Object "" i o Up) $ zip (map iToO nx) [0 .. ]) (Update (generateInterfaces, Nothing))
-
-
 
 
 data AgentXState m = AgentXState
