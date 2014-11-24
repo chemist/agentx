@@ -8,54 +8,16 @@ import Network.Socket.ByteString.Lazy
 import Data.Binary
 import Data.Monoid
 import Control.Monad (forever)
-import Data.Map (Map)
-import qualified Data.Map as Map
 import Data.ByteString (ByteString)
 import Control.Monad.State
 import Control.Monad.Reader
-import Data.Time
 import Control.Applicative
-import Data.Tree
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Types
 import Debug.Trace
 
 type Reaction m = Packet -> m Packet
-
-data Base = Base OID String Values
-
-data Values = Values OID String Value Update deriving (Show)
-
-type ATree = Tree Values
-
-data Generator = Generator String Integer Values
-
-data Update = Up
-            | Fixed
-            | Update (IO ATree, Maybe ([VarBind] -> IO Bool))
-
-base :: OID -> String -> ATree
-base oid name = Node (Values oid name Zero Fixed) []
-
-leaf :: Integer -> String -> Value -> Update -> ATree 
-leaf i name v fs = Node (Values [i] name v fs) []
-
-root :: ATree -> [ATree] -> ATree
-root base' leafs = base' { subForest = leafs }
-
-instance Show Update where
-    show Up = "up"
-    show Fixed = "constant"
-    show (Update (_, Nothing)) = "read-only"
-    show (Update (_, Just _)) = "read-write"
-
-instance Show Base where
-    show (Base oi n v) = 
-        oidToString oi <> " " <> n <>  "\n"
-        <> "  " <> show v
-
-oidToString xs = init $ foldr (\a b -> show a <> "." <> b) "" xs
 
 
 data AgentXState m = AgentXState
