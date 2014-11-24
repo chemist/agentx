@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Network.Protocol.Snmp (Value(..), OID)
@@ -18,12 +19,15 @@ import Debug.Trace
 
 fixmon :: IO ATree
 fixmon = do
-    io <- newIORef 0
+    io <- newIORef (Integer 0)
+    io1 <- newIORef (Integer 1)
+    so <- newIORef (String "")
     let b = (base [1,3,6,1,4,1,44729] "Fixmon")
     t <- generateTime
     n <- generateInterfaces
     i <- genSave io
-    return $ root b [t, n, i]
+    m <- genSaveMul io1 so
+    return $ root b [t, n, i, m]
 
 generateTime :: IO ATree
 generateTime = do
@@ -34,7 +38,7 @@ generateTime = do
 generateInterfaces :: IO ATree
 generateInterfaces = do
     nx <- getNetworkInterfaces
-    let baseLeaf = (leaf 1 "interfaces" Zero (ReadOnly generateInterfaces))
+    let baseLeaf = leaf 1 "interfaces" Zero (ReadOnly generateInterfaces)
         xs = zip [0 .. fromIntegral $ length nx - 1] nx
         indexes = flip map xs $ \(i,_) -> leaf i "" (Integer . fromIntegral $ i) Fixed
         names = flip map xs $ \(i, o) -> leaf i "name" (String . pack . NI.name $ o) Fixed
@@ -49,13 +53,23 @@ generateInterfaces = do
         , root (leaf 4 "mac" Zero Fixed) macs 
         ]
 
-genSave :: IORef Integer -> IO ATree
+genSave :: IORef Value -> IO ATree
 genSave io = do
     x <- readIORef io
-    return $ leaf 2 "ioref" (Integer $ fromIntegral x) (ReadWrite (genSave io) (saveIO io))
+    return $ leaf 2 "ioref" x (ReadWrite (genSave io) (saveIO io))
 
-saveIO :: IORef Integer -> ATree -> IO ()
-saveIO io (Node (Values _ _ (Integer v) _) _ ) = atomicWriteIORef io (fromIntegral v)
+saveIO :: IORef Value -> ATree -> IO ()
+saveIO io (Node (Values _ _ v _) _ ) = atomicWriteIORef io v
+
+genSaveMul :: IORef Value -> IORef Value -> IO ATree
+genSaveMul n s = do
+    nx <- readIORef n
+    sx <- readIORef s
+    let baseLeaf = leaf 3 "multi" Zero (ReadOnly (genSaveMul n s))
+    return $ root baseLeaf $ 
+      [ leaf 0 "int" nx (WriteOnly (saveIO n))
+      , leaf 1 "str" sx (WriteOnly (saveIO s))
+      ]
  
 saveValue :: Value -> (ATree -> IO ()) -> IO ()
 saveValue v f = f (Node (Values undefined undefined v undefined) undefined) 
