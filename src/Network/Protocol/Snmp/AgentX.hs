@@ -15,6 +15,13 @@ import Control.Applicative
 import qualified Data.Tree.Zipper as Zip
 import Data.IORef
 import Debug.Trace
+import qualified Data.Foldable as F
+
+import Network.Socket hiding (recv)
+import Network.Socket.ByteString.Lazy
+import Data.Binary
+import Data.Monoid
+
 
 
 fixmon :: IO ATree
@@ -27,7 +34,7 @@ fixmon = do
     n <- generateInterfaces
     i <- genSave io
     m <- genSaveMul io1 so
-    return $ root b [t, n, i, m]
+    return $ root b [n, i, m]
 
 generateTime :: IO ATree
 generateTime = do
@@ -73,5 +80,54 @@ genSaveMul n s = do
  
 saveValue :: Value -> (ATree -> IO ()) -> IO ()
 saveValue v f = f (Node (Values undefined undefined v undefined) undefined) 
+
+check :: IO ()
+check = do
+    tree <- fixmon
+    sock <- socket AF_UNIX Stream 0
+    connect sock (SockAddrUnix "/var/agentx/master")
+    let open = Open (Timeout 200) [1,3,6,1,4,1,44729] (Description "Haskell AgentX sub-aagent")
+    -- open
+    sendAll sock (encode $ Packet 1 open (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 1))
+    -- for lazy wait more big chunk then i have, and here i fix size for recv
+    h <- recv sock 20
+    b <- recv sock (getBodySizeFromHeader h)
+    let p = decode (h <> b) :: Packet
+    print p
+    sid <- newIORef $ getSid p
+    tid <- newIORef $ getTid p
+    pid <- newIORef $ getPid p
+    F.mapM_ (registerAll sock sid tid pid) $ fullOidTree tree
+    where
+      registerAll sock sid tid pid values = do
+          s <- readIORef sid
+          t <-  readIORef tid 
+          p <-  atomicModifyIORef pid $ \x -> (succ x, succ x)
+          sendAll sock (encode $ Packet 1 (valuesToPacket values) (Flags False False False False False) (SessionID s) (TransactionID t) (PacketID p))
+          h <- recv sock 20
+          b <- recv sock (getBodySizeFromHeader h)
+          let request = decode (h <> b) :: Packet
+          print request
+
+      getPid (Packet _ _ _ _ _ (PacketID x)) = x
+      getTid (Packet _ _ _ _ (TransactionID x) _) = x
+      getSid (Packet _ _ _ (SessionID x) _ _) = x
+      
+    {--
+    sendAll sock (encode $ Packet 1 register (Flags False False False False False) (sessionId p) (TransactionID 1) (PacketID 2))
+    h <- recv sock 20
+    b <- recv sock (getBodySizeFromHeader h)
+    let p = decode (h <> b) :: Packet
+    print p
+    do
+        h <- recv sock 20
+        b <- recv sock (getBodySizeFromHeader h)
+        let g = decode (h <> b) :: Packet
+        print g
+        let response = Response (sysUptime p ) NoAgentXError (Index 0) [VarBind [1,3,6,1,4,1,44729,0,0] (Integer 100)]
+        sendAll sock (encode $ Packet 1 response (Flags False False False False False) (sessionId g) (TransactionID 1) (PacketID 2))
+    print "end"
+    --}
+
 
 

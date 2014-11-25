@@ -13,6 +13,7 @@ import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Types
 import Control.Exception
 import Data.Typeable
+import Data.Maybe
 
 data Base = Base OID String Values
 
@@ -124,4 +125,21 @@ getCurrentValue =  label <$> get
 
 oidV :: Values -> OID
 oidV (Values oi _ _ _) = oi
+
+valuesToPacket :: Values -> PDU
+valuesToPacket (Values oid _ _ _) = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) oid Nothing
+
+addOid :: OID -> Values -> Values
+addOid oid (Values oi a b c) = Values (oid <> oi) a b c 
+
+fullOidTree :: ATree -> ATree
+fullOidTree x = modTree [] x
+  where
+    modTree :: OID -> ATree -> ATree
+    modTree base (Node a []) = Node (addOid base a) []
+    modTree base (Node a xs) = Node (addOid base a) (modForest (oidV (addOid base a)) xs)
+    modForest :: OID -> [ATree] -> [ATree]
+    modForest base [] = []
+    modForest base (x:xs) = modTree base x : modForest base xs
+
 
