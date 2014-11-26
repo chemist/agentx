@@ -16,49 +16,58 @@ import qualified Data.Tree.Zipper as Zip
 import Data.IORef
 import Debug.Trace
 import qualified Data.Foldable as F
+import Control.Monad.State (evalStateT)
+import Control.Exception (catch)
 
 import Network.Socket hiding (recv)
 import Network.Socket.ByteString.Lazy
 import Data.Binary
 import Data.Monoid
 
-
-
-fixmon :: IO ATree
+fixmon :: IO MIBTree
 fixmon = do
-    io <- newIORef (Integer 0)
-    io1 <- newIORef (Integer 1)
-    so <- newIORef (String "")
-    let b = (base [1,3,6,1,4,1,44729] "Fixmon")
-    t <- generateTime
-    n <- generateInterfaces
-    i <- genSave io
-    m <- genSaveMul io1 so
-    return $ root b [n, i, m]
+    time' <- time 
+    interfaces' <- interfaces
+    return $ mModule [1,3,6,1,4,1,44729] "Fixmon"
+      [ mObject 0 "about" Fixed about
+      , time'
+      , interfaces'
+      ]
+    where
+    about :: MIBForest
+    about = [ mObjectType 0 "name" (String "fixmon snmp agent") Fixed
+            , mObjectType 1 "version" (Integer 1) Fixed
+            ]
+    time :: IO MIBTree
+    time = do
+        t <- flip div' 1 <$> getPOSIXTime
+        return $ mObject 1 "time" (Read time)
+            [ mObjectType 0 "time" (String "sysUptime") Fixed
+            , mObjectType 1 "time" (TimeTicks (fromIntegral t)) Fixed
+            ]
+    interfaces :: IO MIBTree
+    interfaces = do
+        nx <- getNetworkInterfaces
+        let xs = zip [0 .. fromIntegral $ length nx -1] nx
+            indexes = flip map xs $ \(i,_) -> mObjectType i "" (Integer . fromIntegral $ i) Fixed
+            names = flip map xs $ \(i, o) -> mObjectType i "name" (String . pack . NI.name $ o) Fixed
+            ipv4s = flip map xs $ \(i, o) -> mObjectType i "ipv4" (String . pack . show . NI.ipv4 $ o) Fixed
+            ipv6s = flip map xs $ \(i, o) -> mObjectType i "ipv6" (String . pack . show . NI.ipv6 $ o) Fixed
+            macs = flip map xs $ \(i, o) -> mObjectType i "mac" (String . pack . show . NI.mac $ o) Fixed
+        return $ mObject 2 "interfaces" (Read interfaces) 
+            [ mObject 0 "indexes" Fixed indexes
+            , mObject 1 "name" Fixed names
+            , mObject 2 "ipv4" Fixed ipv4s
+            , mObject 3 "ipv6" Fixed ipv6s
+            , mObject 4 "mac" Fixed macs
+            ]
 
-generateTime :: IO ATree
-generateTime = do
+getSysUptime :: IO SysUptime
+getSysUptime = do
     t <- flip div' 1 <$> getPOSIXTime
-    let time = leaf 0 "time" (TimeTicks (fromIntegral t)) (ReadOnly generateTime) 
-    return time 
+    return $ SysUptime $ fromIntegral t
 
-generateInterfaces :: IO ATree
-generateInterfaces = do
-    nx <- getNetworkInterfaces
-    let baseLeaf = leaf 1 "interfaces" Zero (ReadOnly generateInterfaces)
-        xs = zip [0 .. fromIntegral $ length nx - 1] nx
-        indexes = flip map xs $ \(i,_) -> leaf i "" (Integer . fromIntegral $ i) Fixed
-        names = flip map xs $ \(i, o) -> leaf i "name" (String . pack . NI.name $ o) Fixed
-        ipv4s = flip map xs $ \(i, o) -> leaf i "ipv4" (String . pack . show . NI.ipv4 $ o) Fixed
-        ipv6s = flip map xs $ \(i, o) -> leaf i "ipv6" (String . pack . show . NI.ipv6 $ o) Fixed
-        macs = flip map xs $ \(i, o) -> leaf i "mac" (String . pack . show . NI.mac $ o) Fixed
-    return $ root baseLeaf $
-        [ root (leaf 0 "indexes" Zero Fixed) indexes 
-        , root (leaf 1 "name" Zero Fixed) names 
-        , root (leaf 2 "ipv4" Zero Fixed) ipv4s 
-        , root (leaf 3 "ipv6" Zero Fixed) ipv6s 
-        , root (leaf 4 "mac" Zero Fixed) macs 
-        ]
+{--
 
 genSave :: IORef Value -> IO ATree
 genSave io = do
@@ -80,6 +89,7 @@ genSaveMul n s = do
  
 saveValue :: Value -> (ATree -> IO ()) -> IO ()
 saveValue v f = f (Node (Values undefined undefined v undefined) undefined) 
+--}
 
 check :: IO ()
 check = do
@@ -90,44 +100,55 @@ check = do
     -- open
     sendAll sock (encode $ Packet 1 open (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 1))
     -- for lazy wait more big chunk then i have, and here i fix size for recv
-    h <- recv sock 20
-    b <- recv sock (getBodySizeFromHeader h)
-    let p = decode (h <> b) :: Packet
-    print p
-    sid <- newIORef $ getSid p
-    tid <- newIORef $ getTid p
-    pid <- newIORef $ getPid p
+    response <- recvPacket sock
+    print "open session"
+    print response
+    sid <- newIORef $ getSid response
+    tid <- newIORef $ getTid response
+    pid <- newIORef $ getPid response
+    print "register all mibs"
     F.mapM_ (registerAll sock sid tid pid) $ fullOidTree tree
+    responder tree sock sid tid pid
     where
       registerAll sock sid tid pid values = do
           s <- readIORef sid
           t <-  readIORef tid 
           p <-  atomicModifyIORef pid $ \x -> (succ x, succ x)
-          sendAll sock (encode $ Packet 1 (valuesToPacket values) (Flags False False False False False) (SessionID s) (TransactionID t) (PacketID p))
-          h <- recv sock 20
-          b <- recv sock (getBodySizeFromHeader h)
-          let request = decode (h <> b) :: Packet
-          print request
+          sendAll sock (encode $ Packet 1 (mibToRegisterPdu values) (Flags False False False False False) (SessionID s) (TransactionID t) (PacketID p))
+          response <- recvPacket sock
+          print response
 
       getPid (Packet _ _ _ _ _ (PacketID x)) = x
       getTid (Packet _ _ _ _ (TransactionID x) _) = x
       getSid (Packet _ _ _ (SessionID x) _ _) = x
-      
-    {--
-    sendAll sock (encode $ Packet 1 register (Flags False False False False False) (sessionId p) (TransactionID 1) (PacketID 2))
+
+responder tree sock sid tid pid = do
+    packet <- recvPacket sock
+    case  packet of
+         Packet _ (Get mc [oid]) f si ti pi -> doResponse tree sock oid si ti pi f
+         _ -> print packet
+    responder tree sock sid tid pid
+
+doResponse :: MIBTree -> Socket -> [Integer] -> SessionID -> TransactionID -> PacketID -> Flags -> IO ()
+doResponse tree sock oid si ti pi f = do
+    (_, founded) <- catch (evalStateT (find oid) (Zip.fromTree tree)) catchFindErrors
+    let value = case founded of
+                   Object{} -> NoSuchObject 
+                   ObjectType _ _ _ value _ -> value
+    now <- getSysUptime
+    let pdu = Response now NoAgentXError (Index 0) [VarBind oid value]
+        response = Packet 1 pdu f si ti pi
+    sendAll sock (encode response)
+    print $ "send response " ++ show response
+
+catchFindErrors :: FindE -> IO (OID, MIB)
+catchFindErrors _ = return ([], ObjectType undefined undefined undefined NoSuchObject undefined)
+
+
+
+recvPacket :: Socket -> IO Packet
+recvPacket sock = do
     h <- recv sock 20
     b <- recv sock (getBodySizeFromHeader h)
-    let p = decode (h <> b) :: Packet
-    print p
-    do
-        h <- recv sock 20
-        b <- recv sock (getBodySizeFromHeader h)
-        let g = decode (h <> b) :: Packet
-        print g
-        let response = Response (sysUptime p ) NoAgentXError (Index 0) [VarBind [1,3,6,1,4,1,44729,0,0] (Integer 100)]
-        sendAll sock (encode $ Packet 1 response (Flags False False False False False) (sessionId g) (TransactionID 1) (PacketID 2))
-    print "end"
-    --}
-
-
+    return $ decode (h <> b)
 
