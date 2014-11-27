@@ -5,7 +5,7 @@
 module Network.Protocol.Snmp.AgentX.ATree where
 
 import Data.Tree
-import Data.Tree.Zipper
+import Data.Tree.Zipper hiding (insert)
 import qualified Data.Tree.Zipper as Zip
 import qualified Data.List as L
 import Safe
@@ -18,9 +18,61 @@ import Control.Exception
 import Data.Typeable
 import Data.Maybe
 
-data MIB = Module OID String
+data MIB = Module OID Name
          | Object OID Integer String Update
          | ObjectType OID Integer String Value Update
+
+data Mib = Obj OID Parent Name Integer
+         deriving (Show, Eq)
+
+instance Ord Mib where
+    compare x y = compare (oid x) (oid y)
+
+class Items a where
+    parent' :: a -> Parent
+    name   :: a -> Name
+    int    :: a -> Integer
+    oid    :: a -> OID
+
+instance Items Mib where
+    parent' (Obj _ x _ _) = x
+    name (Obj _ _ x _) = x
+    int (Obj _ _ _ x) = x
+    oid (Obj x _ _ _) = x
+
+emptyMib = Node (Obj [1,3,6,1] "ISO" "Fixmon" 1) []
+
+ls = [ Obj [] "Fixmon" "one" 0
+     , Obj [] "one" "two" 0
+     , Obj [] "two" "three" 0
+     , Obj [] "two" "simpleInt" 1 
+     , Obj [] "two" "simpleInt" 2 
+     ]
+
+setOid :: OID -> Mib -> Mib
+setOid oi (Obj _ a b c) = Obj (oi <> [c]) a b c
+
+makeOid :: [Mib] -> [Mib]
+makeOid (y@(Obj x _ n i):xs) = setOid [] y : makeOid' [(n, [i])] xs
+  where
+  makeOid' _ [] = []
+  makeOid' base (x:xs) =
+     let Just prev = lookup (parent' x) base 
+         newbase = (name x, prev <> [int x]) : base
+     in setOid prev x : makeOid' newbase xs
+
+insert :: Mib -> Tree Mib -> Tree Mib
+insert (Obj [] _ _ _) n = n
+insert y@(Obj (x:xs) par' nm' ii) n
+    | child:childs <- subForest n, int (rootLabel child) == x 
+        = n { subForest = (insert (Obj xs par' nm' ii) child) :childs}
+    | otherwise = n { subForest = subForest n <> [insert (Obj xs par' nm' ii) (Node y [])] }
+
+mkTree :: [Mib] -> Tree Mib
+mkTree = L.foldl' (flip insert) emptyMib . makeOid
+
+type Parent = String
+type Name = String
 
 instance Show MIB where
     show (Module oid s) = "Module " <> oidToString oid <> " " <> s 
