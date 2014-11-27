@@ -5,7 +5,7 @@
 module Network.Protocol.Snmp.AgentX.ATree where
 
 import Data.Tree
-import Data.Tree.Zipper hiding (insert)
+import Data.Tree.Zipper hiding (insert, parent)
 import qualified Data.Tree.Zipper as Zip
 import qualified Data.List as L
 import Safe
@@ -18,66 +18,82 @@ import Control.Exception
 import Data.Typeable
 import Data.Maybe
 
-data MIB = Module OID Name
-         | Object OID Integer String Update
-         | ObjectType OID Integer String Value Update
+data MIB = Module OID Integer Parent Name
+         | Object OID Integer Parent Name Update
+         | ObjectType OID Integer Parent Name Value Update
 
-data Mib = Obj OID Parent Name Integer
-         deriving (Show, Eq)
+instance Eq MIB where
+    x == y = oid x == oid y
 
-instance Ord Mib where
+instance Ord MIB where
     compare x y = compare (oid x) (oid y)
 
 class Items a where
-    parent' :: a -> Parent
+    parent :: a -> Parent
     name   :: a -> Name
     int    :: a -> Integer
     oid    :: a -> OID
 
-instance Items Mib where
-    parent' (Obj _ x _ _) = x
-    name (Obj _ _ x _) = x
-    int (Obj _ _ _ x) = x
-    oid (Obj x _ _ _) = x
+instance Items MIB where
+    parent (Module _ _ x _) = x
+    parent (Object _ _ x _ _) = x
+    parent (ObjectType _ _ x _ _ _) = x
+    name (Module _ _ _ x) = x
+    name (Object _ _ _ x _) = x
+    name (ObjectType _ _ _ x _ _) = x
+    int (Module _ x _ _) = x
+    int (Object _ x _ _ _) = x
+    int (ObjectType _ x _ _ _ _) = x
+    oid (Module x _ _ _) = x
+    oid (Object x _ _ _ _) = x
+    oid (ObjectType x _ _ _ _ _) = x
 
-emptyMib = Node (Obj [1,3,6,1] "ISO" "Fixmon" 1) []
+emptyMib = Node (Module [1,3,6,1,4444] 4444 "enterprise" "Fixmon") []
 
-ls = [ Obj [] "Fixmon" "one" 0
-     , Obj [] "one" "two" 0
-     , Obj [] "two" "three" 0
-     , Obj [] "two" "simpleInt" 1 
-     , Obj [] "two" "simpleInt" 2 
+ls = [ Object [] 0 "Fixmon" "one" Fixed
+     , Object [] 0 "one" "two" Fixed
+     , ObjectType [] 0 "two" "six" (Integer 1) Fixed
+     , Object [] 1 "one" "tree" Fixed
+     , ObjectType [] 1 "two" "seven" (Integer 1) Fixed
+     , ObjectType [] 1 "tree" "five" (Integer 1) Fixed
+     , ObjectType [] 0 "tree" "fourt" (Integer 1) Fixed
      ]
 
-setOid :: OID -> Mib -> Mib
-setOid oi (Obj _ a b c) = Obj (oi <> [c]) a b c
+makeOid :: [MIB] -> [MIB]
+makeOid (y@(Module x i _ n):xs) = addOid [] y : makeOid' [(n, [i])] xs
+makeOid (y@(Object x i _ n _):xs) = addOid [] y : makeOid' [(n, [i])] xs
+makeOid (y@(ObjectType x i _ n _ _):xs) = addOid [] y : makeOid' [(n, [i])] xs
 
-makeOid :: [Mib] -> [Mib]
-makeOid (y@(Obj x _ n i):xs) = setOid [] y : makeOid' [(n, [i])] xs
-  where
-  makeOid' _ [] = []
-  makeOid' base (x:xs) =
-     let Just prev = lookup (parent' x) base 
-         newbase = (name x, prev <> [int x]) : base
-     in setOid prev x : makeOid' newbase xs
+makeOid' :: [(Name, OID)] -> [MIB] -> [MIB]
+makeOid' _ [] = []
+makeOid' base (x:xs) =
+   let Just prev = lookup (parent x) base 
+       newbase = (name x, prev <> [int x]) : base
+   in addOid prev x : makeOid' newbase xs
 
-insert :: Mib -> Tree Mib -> Tree Mib
-insert (Obj [] _ _ _) n = n
-insert y@(Obj (x:xs) par' nm' ii) n
-    | child:childs <- subForest n, int (rootLabel child) == x 
-        = n { subForest = (insert (Obj xs par' nm' ii) child) :childs}
-    | otherwise = n { subForest = subForest n <> [insert (Obj xs par' nm' ii) (Node y [])] }
+tailOid :: MIB -> MIB
+tailOid (Module oi a b c) = Module (tail oi) a b c
+tailOid (Object oi a b c d) = Object (tail oi) a b c d
+tailOid (ObjectType oi a b c d e) = ObjectType (tail oi) a b c d e
 
-mkTree :: [Mib] -> Tree Mib
-mkTree = L.foldl' (flip insert) emptyMib . makeOid
+insert :: MIB -> MIBTree -> MIBTree
+insert y t 
+  | oid y == [] 
+     = t
+  | child : childs <- subForest t, int (rootLabel child) == head (oid y)
+     = t { subForest = insert (tailOid y) child : childs }
+  | otherwise = t { subForest = insert (tailOid y) (Node y []) :subForest t }
+
+mkTree :: [MIB] -> MIBTree
+mkTree = sortTree . L.foldl' (flip insert) emptyMib . L.sort . makeOid
 
 type Parent = String
 type Name = String
 
 instance Show MIB where
-    show (Module oid s) = "Module " <> oidToString oid <> " " <> s 
-    show (Object oid _ s u) = "Object " <> oidToString oid <> " " <> " " <> s <> " " <> show u
-    show (ObjectType oid _ s v u) = "ObjectType " <> oidToString oid <> " " <> " " <> s <> " " <> show v <> " " <> show u
+    show (Module oid _ _ s) = "Module " <> oidToString oid <> " " <> s 
+    show (Object oid _ _ s u) = "Object " <> oidToString oid <> " " <> " " <> s <> " " <> show u
+    show (ObjectType oid _ _ s v u) = "ObjectType " <> oidToString oid <> " " <> " " <> s <> " " <> show v <> " " <> show u
 
 
 type MIBTree = Tree MIB
@@ -95,14 +111,14 @@ instance Show Update where
     show (ReadWrite _ _) = "read-write"
 
 
-mModule :: OID -> String -> MIBForest -> MIBTree
-mModule oid name childs = Node (Module oid name) childs
+mModule :: OID -> Parent -> Name -> MIBForest -> MIBTree
+mModule oid parent name childs = Node (Module oid (L.last oid) parent name) childs
 
-mObject :: Integer -> String -> Update -> MIBForest -> MIBTree
-mObject i name u childs = Node (Object [] i name u) childs
+mObject :: Integer -> Parent -> Name -> Update -> MIBForest -> MIBTree
+mObject i parent name u childs = Node (Object [] i parent name u) childs
 
-mObjectType :: Integer -> String -> Value -> Update -> MIBTree
-mObjectType i n v u = Node (ObjectType [] i n v u) []
+mObjectType :: Integer -> Parent -> Name -> Value -> Update -> MIBTree
+mObjectType i p n v u = Node (ObjectType [] i p n v u) []
 
 oidToString :: OID -> String
 oidToString [] = ""
@@ -125,21 +141,17 @@ data FindE = BadPath
 
 instance Exception FindE
 
-ifromMIB :: MIB -> Integer
-ifromMIB (Object _ i _ _) = i
-ifromMIB (ObjectType _ i _ _ _) = i
-
 ufromMIB :: MIB -> Update 
-ufromMIB (Object _ _ _ u) = u
-ufromMIB (ObjectType _ _ _ _ u) = u
+ufromMIB (Object _ _ _ _ u) = u
+ufromMIB (ObjectType _ _ _ _ _ u) = u
 
 find :: OID -> AStateT (OID, MIB)
-find oid = do
-    r <- oidV <$> getRoot
-    let stripped = L.stripPrefix r oid
+find oi = do
+    r <- oid <$> getRoot
+    let stripped = L.stripPrefix r oi
     liftIO $ print stripped
     modify Zip.root
-    (,) <$> return oid <*> (findA =<< maybe (throw BadPath) return stripped)
+    (,) <$> return oi <*> (findA =<< maybe (throw BadPath) return stripped)
     where
       findA :: OID -> AStateT MIB
       findA [] = getCurrent
@@ -147,14 +159,14 @@ find oid = do
           c <- Zip.firstChild <$> get
           put =<< maybe (throw DontHaveChildren) return c
           current <- getCurrent
-          if x == ifromMIB current
+          if x == int current
             then reread (ufromMIB current) >> getCurrent
             else findL x
       findA y@(x:xs) = do
           c <- Zip.firstChild <$> get
           put =<< maybe (throw DontHaveChildren) return c
           current <- getCurrent
-          if x == ifromMIB current
+          if x == int current
              then reread (ufromMIB current) >> findA xs
              else findN y
       
@@ -162,7 +174,7 @@ find oid = do
           c <- Zip.next <$> get
           put =<< maybe (throw NotFound) return c
           current <- getCurrent
-          if x == ifromMIB current
+          if x == int current
              then reread (ufromMIB current) >> findA xs
              else findN y
       
@@ -171,7 +183,7 @@ find oid = do
           c <- Zip.next <$> get
           put =<< maybe (throw NotFound) return c
           current <- getCurrent
-          if x == ifromMIB current
+          if x == int current
              then reread (ufromMIB current) >> getCurrent
              else findL x
 
@@ -190,27 +202,30 @@ reread (Write _) = return ()
 getCurrent :: AStateT MIB
 getCurrent =  label <$> get
 
-oidV :: MIB -> OID
-oidV (Module oi _ ) = oi
-oidV (Object oi i _ _) = oi
-oidV (ObjectType oi i _ _ _) = oi
-
 mibToRegisterPdu :: MIB -> PDU
-mibToRegisterPdu (Module oid _ ) = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) oid Nothing
-mibToRegisterPdu (Object oid _ _ _) = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) oid Nothing
-mibToRegisterPdu (ObjectType oid _ _ _ _) = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) oid Nothing
+mibToRegisterPdu (Module oid _ _ _ ) = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) oid Nothing
+mibToRegisterPdu (Object oid _ _ _ _) = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) oid Nothing
+mibToRegisterPdu (ObjectType oid _ _ _ _ _) = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) oid Nothing
 
 addOid :: OID -> MIB -> MIB
-addOid _ (Module oid t) = Module oid t
-addOid oid (Object _ i s u) = Object (oid <> [i]) i s u
-addOid oid (ObjectType _ i s v u) = ObjectType (oid <> [i]) i s v u
+addOid _ (Module oid t p n ) = Module oid t p n
+addOid oid (Object _ i p n u) = Object (oid <> [i]) i p n u
+addOid oid (ObjectType _ i p n v u) = ObjectType (oid <> [i]) i p n v u
+
+instance Ord MIBTree where
+    compare x y = compare (oid (rootLabel x)) (oid (rootLabel y))
+
+sortTree :: MIBTree -> MIBTree
+sortTree x = sortTree' . fullOidTree $ x
+  where
+    sortTree' x@(Node _ f) = x { subForest = L.sort (fmap sortTree' f) }
 
 fullOidTree :: MIBTree -> MIBTree
 fullOidTree x = modTree [] x
   where
     modTree :: OID -> MIBTree -> MIBTree
     modTree base (Node a []) = Node (addOid base a) []
-    modTree base (Node a xs) = Node (addOid base a) (modForest (oidV (addOid base a)) xs)
+    modTree base (Node a xs) = Node (addOid base a) (modForest (oid (addOid base a)) xs)
     modForest :: OID -> [MIBTree] -> [MIBTree]
     modForest base [] = []
     modForest base (x:xs) = modTree base x : modForest base xs
