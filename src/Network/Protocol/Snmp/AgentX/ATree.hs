@@ -1,11 +1,11 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Network.Protocol.Snmp.AgentX.ATree where
 
 import Data.Tree
-import Data.Tree.Zipper hiding (insert, parent)
+import Data.Tree.Zipper hiding (insert, parent, next)
 import qualified Data.Tree.Zipper as Zip
 import qualified Data.List as L
 import Safe
@@ -17,6 +17,78 @@ import Network.Protocol.Snmp.AgentX.Types
 import Control.Exception
 import Data.Typeable
 import Data.Maybe
+import Debug.Trace
+
+data BinTree a i = 
+    Fork { val :: i
+         , object :: Maybe a
+         , next :: BinTree a i
+         , link :: BinTree a i
+         }          
+    | Empty
+    deriving (Show, Eq)
+
+class (Eq b, Ord b) => HasPath a b where
+    path :: a -> [b]
+
+instance HasPath MIB Integer where
+    path (Module p _ _ _) = p
+    path (Object p _ _ _ _) = p
+    path (ObjectType p _ _ _ _ _) = p
+
+instance HasPath [Integer] Integer where
+    path = id
+
+btl :: [OID]
+btl = [[0,0,1], [0,1,0], [0,1,1],[0,0,0] ]
+
+singleton :: HasPath a b => a -> BinTree a b
+singleton m = singleton' (path m, m) 
+    where
+    singleton' ([x], m) = Fork x (Just m) Empty Empty
+    singleton' ((x:xs), m) = Fork x Nothing Empty $ singleton' (xs, m)
+
+fromList :: HasPath a b => [a] -> BinTree a b
+fromList = foldl1 (<>) . map singleton 
+
+data BException = TwoObjectInOnePath deriving (Typeable, Eq, Show)
+
+instance Exception BException
+
+instance HasPath a b => Monoid (BinTree a b) where
+    mempty = Empty
+    Empty `mappend` Empty = Empty
+    (Fork x o n l) `mappend` Empty = Fork x o n l
+    Empty `mappend` (Fork x o n l) = Fork x o n l
+    xt@(Fork x xo nx lx) `mappend` yt@(Fork y yo ny ly) 
+        | x == y = Fork x (splitD xo yo) (nx `mappend` ny) (lx `mappend` ly)
+        | otherwise = Fork x xo (yt `mappend` nx) lx
+        where
+        splitD Nothing Nothing = Nothing
+        splitD (Just a) Nothing = Just a
+        splitD Nothing (Just a) = Just a
+        splitD _ _ = throw TwoObjectInOnePath
+
+convert :: BinTree a Integer -> Tree a
+convert (Fork _ o n l) 
+  | isNothing o = convert l  
+  | otherwise = Node (fromJust o) $ convertToForest l <> convertToForest n
+  where
+      convertToForest :: BinTree a Integer -> Forest a
+      convertToForest Empty = []
+      convertToForest (Fork _ o Empty Empty) = [Node (fromJust o) []]
+      convertToForest (Fork _ o n   Empty) = Node (fromJust o) [] : convertToForest n
+      convertToForest (Fork _ o Empty l  ) = Node (fromJust o) [] : convertToForest l
+      convertToForest (Fork _ o n   l  ) = (Node (fromJust o) (convertToForest l)) : convertToForest n
+
+findB :: OID -> BinTree MIB Integer -> Maybe MIB
+findB _ Empty = Nothing
+findB [x] bt 
+  | val bt == x = object bt
+  | val bt /= x = findB [x] (next bt)
+findB (x:xs) bt
+  | val bt == x = findB xs (link bt)
+  | otherwise = findB (x:xs) (next bt)
 
 data MIB = Module OID Integer Parent Name
          | Object OID Integer Parent Name Update
@@ -50,7 +122,8 @@ instance Items MIB where
 
 emptyMib = Node (Module [1,3,6,1,4444] 4444 "enterprise" "Fixmon") []
 
-ls = [ Object [] 0 "Fixmon" "one" Fixed
+ls = [ Module [1,3,6,1,4444] 4444 "enterprise" "Fixmon"
+     , Object [] 0 "Fixmon" "one" Fixed
      , Object [] 0 "one" "two" Fixed
      , ObjectType [] 0 "two" "six" (Integer 1) Fixed
      , Object [] 1 "one" "tree" Fixed
@@ -60,7 +133,7 @@ ls = [ Object [] 0 "Fixmon" "one" Fixed
      ]
 
 makeOid :: [MIB] -> [MIB]
-makeOid (y@(Module x i _ n):xs) = addOid [] y : makeOid' [(n, [i])] xs
+makeOid (y@(Module x i p n):xs) = y : makeOid' [(n, x)] xs
 makeOid (y@(Object x i _ n _):xs) = addOid [] y : makeOid' [(n, [i])] xs
 makeOid (y@(ObjectType x i _ n _ _):xs) = addOid [] y : makeOid' [(n, [i])] xs
 
