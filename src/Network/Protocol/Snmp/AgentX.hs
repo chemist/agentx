@@ -24,6 +24,7 @@ import Network.Socket.ByteString.Lazy
 import Data.Binary
 import Data.Monoid
 
+{-- 
 fixmon :: IO MIBTree
 fixmon = do
     time' <- time 
@@ -152,3 +153,4 @@ recvPacket sock = do
     b <- recv sock (getBodySizeFromHeader h)
     return $ decode (h <> b)
 
+--}
