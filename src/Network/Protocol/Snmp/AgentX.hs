@@ -2,9 +2,9 @@
 module Network.Protocol.Snmp.AgentX where
 
 import Network.Protocol.Snmp (Value(..), OID)
-import Network.Protocol.Snmp.AgentX.Types
+import Network.Protocol.Snmp.AgentX.Types hiding (getValue)
 import Network.Protocol.Snmp.AgentX.Monads
-import Network.Protocol.Snmp.AgentX.ATree
+import Network.Protocol.Snmp.AgentX.MIBTree
 import Data.Tree
 import Network.Info
 import qualified Network.Info as NI
@@ -24,44 +24,47 @@ import Network.Socket.ByteString.Lazy
 import Data.Binary
 import Data.Monoid
 
-{-- 
-fixmon :: IO MIBTree
+fixmon :: IO (MIBTree MIB)
 fixmon = do
-    time' <- time 
+    time' <-  time
     interfaces' <- interfaces
-    return $ mModule [1,3,6,1,4,1,44729] "enterprise" "Fixmon"
-      [ mObject 0 "Fixmon" "about" Fixed about
-      , time'
-      , interfaces'
-      ]
+    return $ fromList $ 
+      [ iso
+      , org
+      , dod
+      , internet
+      , private
+      , enterprise
+      , mkModule 44729 "enterprise" "Fixmon"
+      , mkObject 0 "Fixmon" "about" Fixed
+      , mkObjectType 0 "about" "name" (String "fixmon snmp agent") Fixed
+      , mkObjectType 1 "about" "version" (Integer 1) Fixed
+      ] <> time' <> interfaces'
     where
-    about :: MIBForest
-    about = [ mObjectType 0 "about" "name" (String "fixmon snmp agent") Fixed
-            , mObjectType 1 "about" "version" (Integer 1) Fixed
-            ]
-    time :: IO MIBTree
+    time :: IO [MIB]
     time = do
         t <- flip div' 1 <$> getPOSIXTime
-        return $ mObject 1 "Fixmon" "time" (Read time)
-            [ mObjectType 0 "time" "description" (String "sysUptime") Fixed
-            , mObjectType 1 "time" "now"  (TimeTicks (fromIntegral t)) Fixed
+        return $ 
+            [ mkObject 1 "Fixmon" "time" (Read time)
+            , mkObjectType 0 "time" "description" (String "sysUptime") Fixed
+            , mkObjectType 1 "time" "now"  (TimeTicks (fromIntegral t)) Fixed
             ]
-    interfaces :: IO MIBTree
+    interfaces :: IO [MIB]
     interfaces = do
         nx <- getNetworkInterfaces
         let xs = zip [0 .. fromIntegral $ length nx -1] nx
-            indexes = flip map xs $ \(i,_) -> mObjectType i "indexes" "index" (Integer . fromIntegral $ i) Fixed
-            names = flip map xs $ \(i, o) -> mObjectType i "names" "name" (String . pack . NI.name $ o) Fixed
-            ipv4s = flip map xs $ \(i, o) -> mObjectType i "ipv4s" "ipv4" (String . pack . show . NI.ipv4 $ o) Fixed
-            ipv6s = flip map xs $ \(i, o) -> mObjectType i "ipv6s" "ipv6" (String . pack . show . NI.ipv6 $ o) Fixed
-            macs = flip map xs $ \(i, o) -> mObjectType i "macs" "mac" (String . pack . show . NI.mac $ o) Fixed
-        return $ mObject 2 "Fixmon" "interfaces" (Read interfaces) 
-            [ mObject 0 "interfaces" "indexes" Fixed indexes
-            , mObject 1 "interfaces" "names" Fixed names
-            , mObject 2 "interfaces" "ipv4s" Fixed ipv4s
-            , mObject 3 "interfaces" "ipv6s" Fixed ipv6s
-            , mObject 4 "interfaces" "macs" Fixed macs
-            ]
+            indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" (Integer . fromIntegral $ i) Fixed
+            names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" (String . pack . NI.name $ o) Fixed
+            ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" (String . pack . show . NI.ipv4 $ o) Fixed
+            ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" (String . pack . show . NI.ipv6 $ o) Fixed
+            macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" (String . pack . show . NI.mac $ o) Fixed
+        return $ 
+            mkObject 2 "Fixmon" "interfaces" (Read interfaces) :
+              (mkObject 0 "interfaces" "indexes" Fixed : indexes) <>
+              (mkObject 1 "interfaces" "names" Fixed   : names )  <>
+              (mkObject 2 "interfaces" "ipv4s" Fixed   : ipv4s )  <>
+              (mkObject 3 "interfaces" "ipv6s" Fixed   : ipv6s )  <>
+              (mkObject 4 "interfaces" "macs" Fixed    : macs )
 
 getSysUptime :: IO SysUptime
 getSysUptime = do
@@ -108,7 +111,7 @@ check = do
     tid <- newIORef $ getTid response
     pid <- newIORef $ getPid response
     print "register all mibs"
-    F.mapM_ (registerAll sock sid tid pid) $ fullOidTree tree
+    F.mapM_ (registerAll sock sid tid pid) $ toList tree
     responder tree sock sid tid pid
     where
       registerAll sock sid tid pid values = do
@@ -130,22 +133,19 @@ responder tree sock sid tid pid = do
          _ -> print packet
     responder tree sock sid tid pid
 
-doResponse :: MIBTree -> Socket -> [Integer] -> SessionID -> TransactionID -> PacketID -> Flags -> IO ()
+doResponse :: MIBTree MIB -> Socket -> [Integer] -> SessionID -> TransactionID -> PacketID -> Flags -> IO ()
 doResponse tree sock oid si ti pi f = do
-    (_, founded) <- catch (evalStateT (find oid) (Zip.fromTree tree)) catchFindErrors
-    let value = case founded of
-                   Object{} -> NoSuchObject 
-                   ObjectType _ _ _ _ value _ -> value
+    let value = case find oid tree of
+                   Nothing  -> NoSuchObject 
+                   Just v -> getValue v
     now <- getSysUptime
     let pdu = Response now NoAgentXError (Index 0) [VarBind oid value]
         response = Packet 1 pdu f si ti pi
     sendAll sock (encode response)
     print $ "send response " ++ show response
 
-catchFindErrors :: FindE -> IO (OID, MIB)
-catchFindErrors _ = return ([], ObjectType undefined  undefined undefined undefined NoSuchObject undefined)
-
-
+mibToRegisterPdu :: MIB -> PDU
+mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
 
 recvPacket :: Socket -> IO Packet
 recvPacket sock = do
@@ -153,4 +153,3 @@ recvPacket sock = do
     b <- recv sock (getBodySizeFromHeader h)
     return $ decode (h <> b)
 
---}
