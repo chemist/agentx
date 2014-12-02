@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Network.Protocol.Snmp.AgentX.MIBTree 
 ( MIB
 , oid
@@ -132,6 +133,7 @@ enterprise = Module [1,3,6,1,4,1] 1 "private" "enterprise"
 
 data MIBException = NotFoundParent 
                   | CantUseLinkHere
+                  | CantRereadMIB
                   | HasSuchObject deriving (Show, Typeable)
 
 instance Exception MIBException
@@ -170,7 +172,7 @@ fromList :: [MIB] -> MIBTree MIB
 fromList = foldl1 insert . map singleton . makeOid
 
 fromListWithFirst :: MIB -> [MIB] -> MIBTree MIB
-fromListWithFirst x = fromListWithBase (parent x) (init $ oid x)
+fromListWithFirst x xs = fromListWithBase (parent x) (init $ oid x) xs
 
 fromListWithBase :: Name -> OID -> [MIB] -> MIBTree MIB
 fromListWithBase n m xs = 
@@ -283,6 +285,22 @@ top z = top (fromJust $ goUp z)
 
 type Base = StateT (Zipper MIB) IO
 
+getUpdate :: MIB -> Update
+getUpdate Module{} = Fixed
+getUpdate (Object _ _ _ _ u) = u
+getUpdate (ObjectType _ _ _ _ _ u) = u
+
+update :: Base ()
+update = do
+    c <-  getFocus <$> get
+    case getUpdate c of
+         Fixed -> return ()
+         Read reread -> do
+             n <- liftIO $ try reread 
+             case n of
+                  Right n' -> modify $ attach (fromListWithFirst c n')
+                  Left (e :: SomeException) -> liftIO $ print e
+
 findOID :: OID -> Base (Maybe MIB)
 findOID xs = do
     modify top
@@ -301,6 +319,7 @@ findOID xs = do
           c <- getFocus <$> get
           if int c == x
              then do
+                 update
                  isOk <- modifyMaybe goLevel 
                  if  isOk 
                     then findOID' xs
