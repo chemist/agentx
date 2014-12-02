@@ -32,6 +32,9 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , fromListWithBase
 , fromListWithFirst
 , findOID
+, findR
+, updateOne
+, updateMulti
 )
 where
 
@@ -46,15 +49,11 @@ import Control.Monad.State
 
 data MIB = Module OID Integer Parent Name
          | Object OID Integer Parent Name Update
-         | ObjectType OID Integer Parent Name Value Update
-         deriving (Show, Eq)
-
-data Mib = Obj OID Integer Parent Name Value Update Mib Mib
-         | Empt
+         | ObjectType OID Integer Parent Name Value 
          deriving (Show, Eq)
 
 getValue :: MIB -> Value
-getValue (ObjectType _ _ _ _ v _) = v
+getValue (ObjectType _ _ _ _ v) = v
 getValue _ = NoSuchInstance
 
 type Parent = String
@@ -69,21 +68,20 @@ class Items a where
 instance Items MIB where
     parent (Module _ _ x _) = x
     parent (Object _ _ x _ _) = x
-    parent (ObjectType _ _ x _ _ _) = x
+    parent (ObjectType _ _ x _ _) = x
     name (Module _ _ _ x) = x
     name (Object _ _ _ x _) = x
-    name (ObjectType _ _ _ x _ _) = x
+    name (ObjectType _ _ _ x _) = x
     int (Module _ x _ _) = x
     int (Object _ x _ _ _) = x
-    int (ObjectType _ x _ _ _ _) = x
+    int (ObjectType _ x _ _ _) = x
     oid (Module x _ _ _) = x
     oid (Object x _ _ _ _) = x
-    oid (ObjectType x _ _ _ _ _) = x
+    oid (ObjectType x _ _ _ _) = x
 
 data Update = Fixed
             | Read (IO [MIB])
-            | Write ([MIB] -> IO ())
-            | ReadWrite (IO [MIB]) ([MIB] -> IO ())
+            | ReadWrite (IO [MIB]) ([(OID, Value)] -> IO ())
 
 instance Eq Update where
     _ == _ = True
@@ -91,7 +89,6 @@ instance Eq Update where
 instance Show Update where
     show Fixed = "fixed"
     show (Read _) = "read-only"
-    show (Write _) = "write-only"
     show (ReadWrite _ _) = "read-write"
 
 
@@ -220,7 +217,7 @@ makeOid xs = makeOid' [] xs
 addOid :: OID -> MIB -> MIB
 addOid oid (Module _ i p n ) = Module (oid <> [i]) i p n
 addOid oid (Object _ i p n u) = Object (oid <> [i]) i p n u
-addOid oid (ObjectType _ i p n v u) = ObjectType (oid <> [i]) i p n v u
+addOid oid (ObjectType _ i p n v) = ObjectType (oid <> [i]) i p n v
 
 makePartedOid :: [(Name, OID)] -> [MIB] -> [MIB]
 makePartedOid _ [] = []
@@ -235,7 +232,7 @@ mkModule = Module []
 mkObject :: Integer -> Parent -> Name -> Update -> MIB
 mkObject = Object []
 
-mkObjectType :: Integer -> Parent -> Name -> Value -> Update -> MIB
+mkObjectType :: Integer -> Parent -> Name -> Value -> MIB
 mkObjectType = ObjectType []
 
 ---------------------------------------------------------------------------------------------------------
@@ -288,46 +285,63 @@ type Base = StateT (Zipper MIB) IO
 getUpdate :: MIB -> Update
 getUpdate Module{} = Fixed
 getUpdate (Object _ _ _ _ u) = u
-getUpdate (ObjectType _ _ _ _ _ u) = u
+getUpdate (ObjectType _ _ _ _ _) = Fixed
 
-update :: Base ()
-update = do
+update :: Maybe [(OID, Value)] -> Base ()
+update mv = do
     c <-  getFocus <$> get
     case getUpdate c of
          Fixed -> return ()
          Read reread -> do
+             liftIO $ print "reread"
              n <- liftIO $ try reread 
              case n of
                   Right n' -> modify $ attach (fromListWithFirst c n')
                   Left (e :: SomeException) -> liftIO $ print e
+         ReadWrite reread write -> do
+             maybe (return ()) (liftIO . write) mv
+             n <- liftIO $ try reread
+             case n of
+                  Right n' -> modify $ attach (fromListWithFirst c n')
+                  Left (e :: SomeException) -> liftIO $ print e
 
-findOID :: OID -> Base (Maybe MIB)
-findOID xs = do
+findR :: OID -> Base (Maybe MIB)
+findR = findOID Nothing
+
+updateOne :: OID -> Value -> Base (Maybe MIB)
+updateOne o v = findOID (Just [(o,v)]) o 
+
+updateMulti :: [(OID, Value)] -> Base (Maybe MIB)
+updateMulti y@(x:xs) = findOID (Just y) (fst x) 
+
+
+findOID :: Maybe [(OID, Value)] -> OID -> Base (Maybe MIB)
+findOID mv xs = do
     modify top
-    findOID' xs
+    findOID' mv xs
     where
-      findOID' [x] = do
+      findOID' mv [x] = do
           c <- getFocus <$> get
           if int c == x
-             then return (Just c)
+             then update mv >> return (Just c)
              else do
                  isOk <- modifyMaybe goNext
                  if isOk
-                    then findOID' [x] 
+                    then findOID' mv [x] 
                     else return Nothing
-      findOID' (x:xs) = do
+      findOID' mv (x:xs) = do
           c <- getFocus <$> get
           if int c == x
              then do
-                 update
+                 update mv -- if not last object, is save must be denied?
                  isOk <- modifyMaybe goLevel 
                  if  isOk 
-                    then findOID' xs
+                    then findOID' mv xs
                     else return Nothing
              else do
                  isOk <- modifyMaybe goNext
                  if isOk
-                    then findOID' (x:xs)
+                    then findOID' mv (x:xs)
                     else return Nothing
       modifyMaybe f = do
           st <- f <$> get

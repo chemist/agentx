@@ -28,6 +28,9 @@ fixmon :: IO (MIBTree MIB)
 fixmon = do
     time' <-  time
     interfaces' <- interfaces
+    io <-  newIORef (Integer 0)
+    str <-  newIORef (String "hello")
+    io' <- saved io str
     return $ fromList $ 
       [ iso
       , org
@@ -37,19 +40,19 @@ fixmon = do
       , enterprise
       , mkModule 44729 "enterprise" "Fixmon"
       , mkObject 0 "Fixmon" "about" Fixed
-      , mkObjectType 0 "about" "name" (String "fixmon snmp agent") Fixed
-      , mkObjectType 1 "about" "version" (Integer 1) Fixed
-      ] <> time' <> interfaces'
+      , mkObjectType 0 "about" "name" (String "fixmon snmp agent")
+      , mkObjectType 1 "about" "version" (Integer 1)
+      ] <> time' <> interfaces' <> io'
     where
     interfaces :: IO [MIB]
     interfaces = do
         nx <- getNetworkInterfaces
         let xs = zip [0 .. fromIntegral $ length nx -1] nx
-            indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" (Integer . fromIntegral $ i) Fixed
-            names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" (String . pack . NI.name $ o) Fixed
-            ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" (String . pack . show . NI.ipv4 $ o) Fixed
-            ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" (String . pack . show . NI.ipv6 $ o) Fixed
-            macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" (String . pack . show . NI.mac $ o) Fixed
+            indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" (Integer . fromIntegral $ i)
+            names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" (String . pack . NI.name $ o)
+            ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" (String . pack . show . NI.ipv4 $ o)
+            ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" (String . pack . show . NI.ipv6 $ o)
+            macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" (String . pack . show . NI.mac $ o)
         return $ 
             mkObject 2 "Fixmon" "interfaces" (Read interfaces) :
               (mkObject 0 "interfaces" "indexes" Fixed : indexes) <>
@@ -63,8 +66,8 @@ time = do
     t <- flip div' 1 <$> getPOSIXTime
     return $ 
         [ mkObject 1 "Fixmon" "time" (Read time)
-        , mkObjectType 0 "time" "description" (String "sysUptime") Fixed
-        , mkObjectType 1 "time" "now"  (TimeTicks (fromIntegral t)) Fixed
+        , mkObjectType 0 "time" "description" (String "sysUptime")
+        , mkObjectType 1 "time" "now"  (TimeTicks (fromIntegral t))
         ]
 
 getSysUptime :: IO SysUptime
@@ -72,29 +75,22 @@ getSysUptime = do
     t <- flip div' 1 <$> getPOSIXTime
     return $ SysUptime $ fromIntegral t
 
-{--
-
-genSave :: IORef Value -> IO ATree
-genSave io = do
+-- saved value
+saved :: IORef Value -> IORef Value -> IO [MIB]
+saved io str = do
     x <- readIORef io
-    return $ leaf 2 "ioref" x (ReadWrite (genSave io) (saveIO io))
+    y <- readIORef str
+    return $ mkObject 3 "Fixmon" "saved" (ReadWrite (saved io str) (saveIO io str))
+           : mkObjectType 0 "saved" "integer" x
+           : mkObjectType 1 "saved" "string" y
+           : []
 
-saveIO :: IORef Value -> ATree -> IO ()
-saveIO io (Node (Values _ _ v _) _ ) = atomicWriteIORef io v
-
-genSaveMul :: IORef Value -> IORef Value -> IO ATree
-genSaveMul n s = do
-    nx <- readIORef n
-    sx <- readIORef s
-    let baseLeaf = leaf 3 "multi" Zero (ReadOnly (genSaveMul n s))
-    return $ root baseLeaf $ 
-      [ leaf 0 "int" nx (WriteOnly (saveIO n))
-      , leaf 1 "str" sx (WriteOnly (saveIO s))
-      ]
- 
-saveValue :: Value -> (ATree -> IO ()) -> IO ()
-saveValue v f = f (Node (Values undefined undefined v undefined) undefined) 
---}
+saveIO :: IORef Value -> IORef Value -> [(OID, Value)] -> IO ()
+saveIO io str [] = return ()
+saveIO io str (x:xs) = case fst x of
+                            [1,3,6,1,4,1,44729,3,0] -> atomicWriteIORef io (snd x) >> saveIO io str xs
+                            [1,3,6,1,4,1,44729,3,1] -> atomicWriteIORef str (snd x) >> saveIO io str xs
+                            _ -> saveIO io str xs
 
 check :: IO ()
 check = do
