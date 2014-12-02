@@ -41,14 +41,6 @@ fixmon = do
       , mkObjectType 1 "about" "version" (Integer 1) Fixed
       ] <> time' <> interfaces'
     where
-    time :: IO [MIB]
-    time = do
-        t <- flip div' 1 <$> getPOSIXTime
-        return $ 
-            [ mkObject 1 "Fixmon" "time" (Read time)
-            , mkObjectType 0 "time" "description" (String "sysUptime") Fixed
-            , mkObjectType 1 "time" "now"  (TimeTicks (fromIntegral t)) Fixed
-            ]
     interfaces :: IO [MIB]
     interfaces = do
         nx <- getNetworkInterfaces
@@ -65,6 +57,15 @@ fixmon = do
               (mkObject 2 "interfaces" "ipv4s" Fixed   : ipv4s )  <>
               (mkObject 3 "interfaces" "ipv6s" Fixed   : ipv6s )  <>
               (mkObject 4 "interfaces" "macs" Fixed    : macs )
+
+time :: IO [MIB]
+time = do
+    t <- flip div' 1 <$> getPOSIXTime
+    return $ 
+        [ mkObject 1 "Fixmon" "time" (Read time)
+        , mkObjectType 0 "time" "description" (String "sysUptime") Fixed
+        , mkObjectType 1 "time" "now"  (TimeTicks (fromIntegral t)) Fixed
+        ]
 
 getSysUptime :: IO SysUptime
 getSysUptime = do
