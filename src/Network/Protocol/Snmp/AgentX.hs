@@ -1,4 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Network.Protocol.Snmp (Value(..), OID)
@@ -16,8 +18,8 @@ import qualified Data.Tree.Zipper as Zip
 import Data.IORef
 import Debug.Trace
 import qualified Data.Foldable as F
-import Control.Monad.State (evalStateT)
-import Control.Exception (catch)
+import Control.Monad.State (evalStateT, StateT)
+import Control.Exception (catch, throwIO)
 
 import Network.Socket hiding (recv)
 import Network.Socket.ByteString.Lazy
@@ -30,7 +32,15 @@ fixmon = do
     interfaces' <- interfaces
     io <-  newIORef (Integer 0)
     str <-  newIORef (String "hello")
-    io' <- saved io str
+    io1 <-  newIORef (Integer 1)
+    str1 <-  newIORef (String "bye")
+    let base = [ ([1,3,6,1,4,1,44729,3,0], io)
+               , ([1,3,6,1,4,1,44729,3,1], io)
+               , ([1,3,6,1,4,1,44729,4,0], io)
+               , ([1,3,6,1,4,1,44729,4,1], io)
+               ]
+    io' <- saved io str base
+    otherS <- otherSaved io1 str1 base
     return $ fromList $ 
       [ iso
       , org
@@ -42,7 +52,7 @@ fixmon = do
       , mkObject 0 "Fixmon" "about" Fixed
       , mkObjectType 0 "about" "name" (String "fixmon snmp agent")
       , mkObjectType 1 "about" "version" (Integer 1)
-      ] <> time' <> interfaces' <> io'
+      ] <> time' <> interfaces' <> io' <> otherS
     where
     interfaces :: IO [MIB]
     interfaces = do
@@ -75,22 +85,33 @@ getSysUptime = do
     t <- flip div' 1 <$> getPOSIXTime
     return $ SysUptime $ fromIntegral t
 
+type Full = [(OID, IORef Value)]
+
 -- saved value
-saved :: IORef Value -> IORef Value -> IO [MIB]
-saved io str = do
+saved :: IORef Value -> IORef Value -> Full -> IO [MIB]
+saved io str base = do
     x <- readIORef io
     y <- readIORef str
-    return $ mkObject 3 "Fixmon" "saved" (ReadWrite (saved io str) (saveIO io str))
+    return $ mkObject 3 "Fixmon" "saved" (ReadWrite (saved io str base) (saveIO base))
            : mkObjectType 0 "saved" "integer" x
            : mkObjectType 1 "saved" "string" y
            : []
 
-saveIO :: IORef Value -> IORef Value -> [(OID, Value)] -> IO ()
-saveIO io str [] = return ()
-saveIO io str (x:xs) = case fst x of
-                            [1,3,6,1,4,1,44729,3,0] -> atomicWriteIORef io (snd x) >> saveIO io str xs
-                            [1,3,6,1,4,1,44729,3,1] -> atomicWriteIORef str (snd x) >> saveIO io str xs
-                            _ -> saveIO io str xs
+otherSaved :: IORef Value -> IORef Value -> Full -> IO [MIB]
+otherSaved io str base = do
+    x <- readIORef io
+    y <- readIORef str
+    return $ mkObject 4 "Fixmon" "other" (ReadWrite (saved io str base) (saveIO base))
+           : mkObjectType 0 "other" "integer" x
+           : mkObjectType 1 "other" "string" y
+           : []
+
+saveIO :: Full -> [(OID, Value)] -> IO ()
+saveIO _ [] = return ()
+saveIO base (x:xs) = 
+    case lookup (fst x) base of
+         Nothing -> throwIO NotDescribedUpdate
+         Just io -> atomicWriteIORef io (snd x) >> saveIO base xs
 
 check :: IO ()
 check = do
@@ -109,7 +130,10 @@ check = do
     pid <- newIORef $ getPid response
     print "register all mibs"
     F.mapM_ (registerAll sock sid tid pid) $ toList tree
-    responder tree sock sid tid pid
+    s <- getSysUptime
+    let st = AgentXState s (PacketID 1) (toZipper tree) sock
+    -- responder tree sock sid tid pid
+    listener sock (snmpAgent st)
     where
       registerAll sock sid tid pid values = do
           s <- readIORef sid
@@ -123,6 +147,16 @@ check = do
       getTid (Packet _ _ _ _ (TransactionID x) _) = x
       getSid (Packet _ _ _ (SessionID x) _ _) = x
 
+type AG = StateT AgentXState IO
+
+instance AgentM AG
+
+listener :: Socket -> (Packet -> AG Packet) -> IO ()
+listener sock f = do
+    packet <- recvPacket sock
+    r <- undefined
+    undefined
+{--
 responder tree sock sid tid pid = do
     packet <- recvPacket sock
     case  packet of
@@ -141,12 +175,13 @@ doResponse tree sock oid si ti pi f = do
     sendAll sock (encode response)
     print $ "send response " ++ show response
 
-mibToRegisterPdu :: MIB -> PDU
-mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
-
 recvPacket :: Socket -> IO Packet
 recvPacket sock = do
     h <- recv sock 20
     b <- recv sock (getBodySizeFromHeader h)
     return $ decode (h <> b)
+--}
+
+mibToRegisterPdu :: MIB -> PDU
+mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
 

@@ -1,5 +1,9 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Network.Protocol.Snmp.AgentX.MIBTree 
 ( MIB
 , oid
@@ -35,6 +39,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , findR
 , updateOne
 , updateMulti
+, MIBException(..)
 )
 where
 
@@ -131,6 +136,8 @@ enterprise = Module [1,3,6,1,4,1] 1 "private" "enterprise"
 data MIBException = NotFoundParent 
                   | CantUseLinkHere
                   | CantRereadMIB
+                  | NotFound OID
+                  | NotDescribedUpdate
                   | HasSuchObject deriving (Show, Typeable)
 
 instance Exception MIBException
@@ -305,44 +312,44 @@ update mv = do
                   Right n' -> modify $ attach (fromListWithFirst c n')
                   Left (e :: SomeException) -> liftIO $ print e
 
-findR :: OID -> Base (Maybe MIB)
+findR :: OID -> Base (Either MIBException MIB)
 findR = findOID Nothing
 
-updateOne :: OID -> Value -> Base (Maybe MIB)
+updateOne :: OID -> Value -> Base (Either MIBException MIB)
 updateOne o v = findOID (Just [(o,v)]) o 
 
-updateMulti :: [(OID, Value)] -> Base (Maybe MIB)
-updateMulti y@(x:xs) = findOID (Just y) (fst x) 
+updateMulti :: [(OID, Value)] -> Base [Either MIBException MIB]
+updateMulti (x:xs) = (:) <$> updateOne (fst x) (snd x) <*> updateMulti xs
 
-
-findOID :: Maybe [(OID, Value)] -> OID -> Base (Maybe MIB)
+findOID :: Maybe [(OID, Value)] -> OID -> Base (Either MIBException MIB)
 findOID mv xs = do
     modify top
-    findOID' mv xs
+    findOID' mv xs xs
     where
-      findOID' mv [x] = do
+      findOID' :: Maybe [(OID, Value)] -> OID -> OID -> Base (Either MIBException MIB)
+      findOID' mv [x] ys = do
           c <- getFocus <$> get
           if int c == x
-             then update mv >> return (Just c)
+             then update mv >> return (Right c)
              else do
                  isOk <- modifyMaybe goNext
                  if isOk
-                    then findOID' mv [x] 
-                    else return Nothing
-      findOID' mv (x:xs) = do
+                    then findOID' mv [x] ys
+                    else return (Left $ NotFound ys)
+      findOID' mv (x:xs) ys = do
           c <- getFocus <$> get
           if int c == x
              then do
                  update mv -- if not last object, is save must be denied?
                  isOk <- modifyMaybe goLevel 
                  if  isOk 
-                    then findOID' mv xs
-                    else return Nothing
+                    then findOID' mv xs ys
+                    else return (Left $ NotFound ys)
              else do
                  isOk <- modifyMaybe goNext
                  if isOk
-                    then findOID' mv (x:xs)
-                    else return Nothing
+                    then findOID' mv (x:xs) ys
+                    else return (Left $ NotFound ys)
       modifyMaybe f = do
           st <- f <$> get
           maybe (return False) (\x -> put x >> return True) st
