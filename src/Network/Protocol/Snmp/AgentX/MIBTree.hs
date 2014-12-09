@@ -4,9 +4,12 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Network.Protocol.Snmp.AgentX.MIBTree 
 ( MIB
 , oid
+, name
 , mkObject
 , mkModule
 , mkObjectType
@@ -51,6 +54,7 @@ import Control.Applicative
 import Data.Tree
 import Data.Maybe 
 import Control.Monad.State 
+import qualified Data.List as L
 
 data MIB = Module OID Integer Parent Name
          | Object OID Integer Parent Name Update
@@ -59,6 +63,7 @@ data MIB = Module OID Integer Parent Name
 
 getValue :: MIB -> Value
 getValue (ObjectType _ _ _ _ v) = v
+getValue (Object _ _ _ _ _) = NoSuchObject
 getValue _ = NoSuchInstance
 
 type Parent = String
@@ -137,6 +142,7 @@ data MIBException = NotFoundParent
                   | CantUseLinkHere
                   | CantRereadMIB
                   | NotFound OID
+                  | NotSuch OID
                   | NotDescribedUpdate
                   | HasSuchObject deriving (Show, Typeable)
 
@@ -239,8 +245,14 @@ mkModule = Module []
 mkObject :: Integer -> Parent -> Name -> Update -> MIB
 mkObject = Object []
 
+mkObject' :: OID -> MIB
+mkObject' oid = Object oid (last oid) "" "" Fixed
+
 mkObjectType :: Integer -> Parent -> Name -> Value -> MIB
 mkObjectType = ObjectType []
+
+mkObjectType' :: OID -> MIB
+mkObjectType' oid = ObjectType oid (last oid) "" "" NoSuchInstance 
 
 ---------------------------------------------------------------------------------------------------------
 -- zipper
@@ -287,14 +299,14 @@ top :: Zipper a -> Zipper a
 top (t,[]) = (t,[])  
 top z = top (fromJust $ goUp z)
 
-type Base = StateT (Zipper MIB) IO
+type Base m a = forall . (MonadState (Zipper MIB) m, MonadIO m, Functor m, Applicative m) => m a
 
 getUpdate :: MIB -> Update
 getUpdate Module{} = Fixed
 getUpdate (Object _ _ _ _ u) = u
 getUpdate (ObjectType _ _ _ _ _) = Fixed
 
-update :: Maybe [(OID, Value)] -> Base ()
+update :: Maybe [(OID, Value)] -> Base m ()
 update mv = do
     c <-  getFocus <$> get
     case getUpdate c of
@@ -312,30 +324,44 @@ update mv = do
                   Right n' -> modify $ attach (fromListWithFirst c n')
                   Left (e :: SomeException) -> liftIO $ print e
 
-findR :: OID -> Base (Either MIBException MIB)
+findR :: OID -> Base m MIB
 findR = findOID Nothing
 
-updateOne :: OID -> Value -> Base (Either MIBException MIB)
+updateOne :: OID -> Value -> Base m MIB
 updateOne o v = findOID (Just [(o,v)]) o 
 
-updateMulti :: [(OID, Value)] -> Base [Either MIBException MIB]
+updateMulti :: [(OID, Value)] -> Base m [MIB]
 updateMulti (x:xs) = (:) <$> updateOne (fst x) (snd x) <*> updateMulti xs
 
-findOID :: Maybe [(OID, Value)] -> OID -> Base (Either MIBException MIB)
+notFound :: OID -> Base m MIB
+notFound oid = do
+    b <- get
+    case goUp b of
+         Nothing -> return $ mkObject' oid
+         Just nb -> do
+             put nb
+             c <- getFocus <$> get
+             case c of
+                  Object{} -> return $ mkObject' oid
+                  Module{} -> return $ mkObject' oid
+                  ObjectType{} -> return $ mkObjectType' oid 
+
+findOID :: Maybe [(OID, Value)] -> OID -> Base m MIB
 findOID mv xs = do
     modify top
-    findOID' mv xs xs
+    c <- getFocus <$> get
+    maybe (return $ mkObject' xs) (\x -> findOID' mv x xs) $ L.stripPrefix (L.init $ oid c) xs
     where
-      findOID' :: Maybe [(OID, Value)] -> OID -> OID -> Base (Either MIBException MIB)
+      findOID' :: Maybe [(OID, Value)] -> OID -> OID -> Base m MIB
       findOID' mv [x] ys = do
           c <- getFocus <$> get
           if int c == x
-             then update mv >> return (Right c)
+             then update mv >> return c
              else do
                  isOk <- modifyMaybe goNext
                  if isOk
                     then findOID' mv [x] ys
-                    else return (Left $ NotFound ys)
+                    else notFound ys
       findOID' mv (x:xs) ys = do
           c <- getFocus <$> get
           if int c == x
@@ -344,12 +370,12 @@ findOID mv xs = do
                  isOk <- modifyMaybe goLevel 
                  if  isOk 
                     then findOID' mv xs ys
-                    else return (Left $ NotFound ys)
+                    else notFound ys
              else do
                  isOk <- modifyMaybe goNext
                  if isOk
                     then findOID' mv (x:xs) ys
-                    else return (Left $ NotFound ys)
+                    else notFound ys
       modifyMaybe f = do
           st <- f <$> get
           maybe (return False) (\x -> put x >> return True) st

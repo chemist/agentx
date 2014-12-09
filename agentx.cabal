@@ -27,6 +27,7 @@ library
                      , network
                      , containers
                      , mtl
+                     , transformers
                      , time
                      , network-info
                      , rosezipper
