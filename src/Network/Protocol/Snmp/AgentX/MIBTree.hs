@@ -199,14 +199,15 @@ find (x:xs) bt
   | otherwise = find (x:xs) (next bt)
 
 printTree :: MIBTree MIB -> IO ()
-printTree (Fork o n l) =
-    putStr $ drawTree $ fmap show $ Node o $ convertToForest l <> convertToForest n
+printTree f = putStr $ unlines $ drawLevel f
   where
-      convertToForest :: MIBTree MIB -> Forest MIB
-      convertToForest Empty = []
-      convertToForest (Link _ n l) = convertToForest n <> convertToForest l
-      convertToForest (Fork o Empty Empty) = [Node o []]
-      convertToForest (Fork o n   l  ) = (Node o (convertToForest l)) : convertToForest n
+    drawLevel Empty = []
+    drawLevel (Link i next level) = ("Temp node: " <> show i) : (drawSubtree next level)
+    drawLevel (Fork o next level) = (show o) : (drawSubtree next level)
+    
+    drawSubtree next level = (shift "`- " " | " (drawLevel level)) <> drawLevel next
+      where 
+      shift first rest = zipWith (++) (first : repeat rest)
 
 makeOid :: [MIB] -> [MIB]
 makeOid xs = makeOid' [] xs
