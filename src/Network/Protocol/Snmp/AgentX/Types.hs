@@ -15,9 +15,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Control.Applicative hiding (empty)
 import Data.Monoid
-import Data.Bits
 import Data.Bits.Bitwise (fromListLE, toListLE)
-import Data.Maybe (fromMaybe)
 import Data.Int
 import Prelude hiding (getContents)
 
@@ -49,6 +47,7 @@ reasonFromTag 3 = ProtocolError
 reasonFromTag 4 = Timeouts     
 reasonFromTag 5 = Shutdown     
 reasonFromTag 6 = ByManager    
+reasonFromTag _ = error "unknown reasonFromTag"
 
 newtype Context = Context ByteString deriving (Show, Eq)
 
@@ -128,6 +127,7 @@ rerrorFromTag 265 = UnknownAgentCaps
 rerrorFromTag 266 = RParseError          
 rerrorFromTag 267 = RequestDenied        
 rerrorFromTag 268 = ProcessingError      
+rerrorFromTag _   = error "bad rerror"        
 
 data PDU = Open Timeout OID Description -- 6.2.1
          | Close Reason                 -- 6.2.2
@@ -177,8 +177,8 @@ class ToBuilder a where
 data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext BigEndian deriving (Show)
 
 instance ToBuilder (Flags -> Builder) where
-    toBuilder (Flags instanceRegistration newIndex anyIndex nonDefCont nbo) = 
-        singleton $ fromListLE [instanceRegistration, newIndex, anyIndex, nonDefCont, nbo]
+    toBuilder (Flags instanceRegistration newIndex anyIndex ndc nbo) = 
+        singleton $ fromListLE [instanceRegistration, newIndex, anyIndex, ndc, nbo]
 
 flagsFromTag :: Word8 -> Flags
 flagsFromTag x =
@@ -210,17 +210,27 @@ instance ToBuilder (BigEndian -> VarBind -> Builder) where
      builder16 bo (valueToTag v) <> builder16 bo 0 <> toBuilder bo False o <> toBuilder bo v
 
 
+builder64 :: Bool -> Word64 -> Builder
 builder64 True = putWord64be
 builder64 False = putWord64le
+
+builder32 :: Bool -> Word32 -> Builder
 builder32 True = putWord32be
 builder32 False = putWord32le
+
+builder16 :: Bool -> Word16 -> Builder
 builder16 True = putWord16be
 builder16 False = putWord16le
 
+get16 :: Bool -> Get Word16
 get16 True = getWord16be
 get16 False = getWord16le
+
+get32 :: Bool -> Get Word32
 get32 True = getWord32be
 get32 False = getWord32le
+
+get64 :: Bool -> Get Word64
 get64 True = getWord64be
 get64 False = getWord64le
 
@@ -235,7 +245,7 @@ instance ToBuilder (BigEndian -> Include -> OID -> Builder) where
     toBuilder _ _  [] = singleton 0 <> singleton 0 <> singleton 0 <> singleton 0
     toBuilder bo i (1:3:6:1:[]) =  -- Not clearly in rfc!!!
       singleton 4 <> singleton 0 <> toBuilder i <> singleton 0
-      <> mconcat (map (builder32 bo . fromIntegral) [1,3,6,1])
+      <> mconcat (map (builder32 bo . fromIntegral) [(1::Integer),3,6,1])
     toBuilder bo i (1:3:6:1:xs) = 
       singleton (fromIntegral (length xs - 1)) <> singleton (fromIntegral (head xs)) <> toBuilder i <> singleton 0
       <> mconcat (map (builder32 bo . fromIntegral) (tail xs))
@@ -260,17 +270,19 @@ instance ToBuilder (BigEndian -> Value -> Builder) where
     toBuilder bo (Snmp.String xs) = toBuilder bo xs
     toBuilder bo (Snmp.Opaque xs) = toBuilder bo xs
     toBuilder bo (Snmp.IpAddress a b c d) = toBuilder bo $ B.pack [a,b,c,d]
-    toBuilder bo (Snmp.Zero) = empty
-    toBuilder bo (Snmp.NoSuchObject) = empty
-    toBuilder bo (Snmp.NoSuchInstance) = empty
-    toBuilder bo (Snmp.EndOfMibView) = empty
+    toBuilder _  (Snmp.Zero) = empty
+    toBuilder _  (Snmp.NoSuchObject) = empty
+    toBuilder _  (Snmp.NoSuchInstance) = empty
+    toBuilder _  (Snmp.EndOfMibView) = empty
+    toBuilder _  (Snmp.ZeroDotZero) = empty
 
 getValue :: BigEndian -> Word16 -> Get Value
+getValue _  0 = return ZeroDotZero
 getValue bo 2 = Integer . fromIntegral <$> get32 bo
 getValue bo 4 = String <$> getString bo
-getValue bo 5 = return Zero
+getValue _  5 = return Zero
 getValue bo 6 = OI <$> getOid bo
-getValue bo 64 = do
+getValue _  64 = do
     a <- getWord8
     b <- getWord8
     c <- getWord8
@@ -281,12 +293,15 @@ getValue bo 66 = Gaude32 <$> get32 bo
 getValue bo 67 = TimeTicks <$> get32 bo
 getValue bo 68 = Opaque <$> getString bo
 getValue bo 70 = Counter64 <$> get64 bo
-getValue bo 128 = return NoSuchObject
-getValue bo 129 = return NoSuchInstance
-getValue bo 130 = return EndOfMibView
+getValue _  128 = return NoSuchObject
+getValue _  129 = return NoSuchInstance
+getValue _  130 = return EndOfMibView
+getValue _ _ = error "getValue bad tag"
 
 
+-- TODO check zerodotzero 
 valueToTag :: Value -> Word16
+valueToTag (Snmp.ZeroDotZero)       = 0
 valueToTag (Snmp.Integer _)         = 2
 valueToTag (Snmp.String _)          = 4
 valueToTag (Snmp.Zero)              = 5
@@ -316,13 +331,14 @@ pduToBuilder (Open (Timeout t) o (Description d)) (Flags _ _ _ _ bi)  =
     let body = singleton t <> singleton 0 <> singleton 0 <> singleton 0
              <> toBuilder bi False o <> toBuilder bi d
     in (body, bodyLength body)
-pduToBuilder (Close r) (Flags _ _ _ _ bi)  =
+pduToBuilder (Close r) (Flags _ _ _ _ _)  =
     let body = singleton (reasonToTag r) <> singleton 0 <> singleton 0 <> singleton 0
     in (body, PayloadLenght 4)
 pduToBuilder (Register mc (Timeout t) (Priority p) (RangeSubid r) s mu) (Flags _ _ _ ndc bi) =  --TODO ? INSTANCE_REGISTRATION
     let upperBound = case (r, mu) of
                           (0, _) -> empty
                           (_, Just (UpperBound u)) -> builder32 bi u
+                          (_, Nothing) -> error "pduToBuilder"
         body = toBuilder bi ndc mc 
             <> singleton t <> singleton p <> singleton r <> singleton 0
             <> toBuilder bi False s
@@ -332,6 +348,7 @@ pduToBuilder (Unregister mc (Priority p) (RangeSubid r) s mu) (Flags _ _ _ ndc b
     let upperBound = case (r, mu) of
                           (0, _) -> empty
                           (_, Just (UpperBound u)) -> builder32 bi u
+                          (_, Nothing) -> error "pduToBuilder"
         body = toBuilder bi ndc mc
             <> singleton 0 <> singleton p <> singleton r <> singleton 0
             <> toBuilder bi False s
@@ -415,7 +432,7 @@ getOid :: BigEndian -> Get OID
 getOid bo = do
     nSubId <- getWord8
     prefix <- getWord8
-    include <- getWord8
+    _include <- getWord8
     _reserved <- getWord8
     end <- sequence $ replicate (fromIntegral nSubId) (get32 bo)
     case (nSubId, prefix) of
@@ -431,8 +448,8 @@ getOidList bo xs = do
        then return $ reverse (addOi oi xs)
        else getOidList bo (addOi oi xs)
     where
-    addOi [] xs = xs
-    addOi oi xs = oi:xs
+    addOi [] xss = xss
+    addOi oi xss = oi:xss
 
 getSearchRange :: BigEndian -> Get SearchRange
 getSearchRange bo = do
@@ -544,7 +561,7 @@ parsePdu t f s
     | t == 10 = return $ UndoSet
     | t == 11 = return $ CleanupSet
     | t == 12 = do
-        c <- getContext (bigEndian f) (nonDefCont f)
+        _c <- getContext (bigEndian f) (nonDefCont f)
         -- Notify
         context <- getContext (bigEndian f) (nonDefCont f)
         vbl <- getVarBindList (bigEndian f) []
@@ -576,12 +593,13 @@ parsePdu t f s
         return $ RemoveAgentCaps context oi
     | t == 18 = do
         -- Response
-        sysUptime <- SysUptime <$> get32 (bigEndian f) 
+        sysuptime <- SysUptime <$> get32 (bigEndian f) 
         rerror <- rerrorFromTag <$> get16 (bigEndian f) 
         index <- Index <$> get16 (bigEndian f) 
         if (s == 8)
-           then return $ Response sysUptime rerror index []
-           else Response sysUptime rerror index <$> (getVarBindList (bigEndian f) [])
+           then return $ Response sysuptime rerror index []
+           else Response sysuptime rerror index <$> (getVarBindList (bigEndian f) [])
+    | otherwise = error "parse pdu unknown tag"
 
 bigEndian :: Flags -> Bool
 bigEndian (Flags _ _ _ _ x) = x
@@ -594,6 +612,7 @@ sessionId (Packet _ _ _ x _ _) = x
 
 sysUptime :: Packet -> SysUptime
 sysUptime (Packet _ (Response x _ _ _) _ _ _ _) = x
+sysUptime _ = error "sysUptime bad case"
 
 getBodySizeFromHeader :: BL.ByteString -> Int64
 getBodySizeFromHeader "" = 0

@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Network.Protocol.Snmp.AgentX.Monads where
 
 import Network.Socket hiding (recv)
 import Network.Socket.ByteString.Lazy
-import Data.ByteString (ByteString)
 import Data.ByteString.Char8 (pack)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
@@ -14,10 +14,10 @@ import qualified Data.Foldable as F
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 
-import Network.Protocol.Snmp (Value(..), OID)
+import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Types hiding (getValue)
 import Network.Protocol.Snmp.AgentX.MIBTree
-import Debug.Trace
+-- import Debug.Trace
 
 data ST = ST
   { sysuptime :: SysUptime
@@ -36,9 +36,9 @@ bridgeToBase f = do
     return result
 
 recvPacket :: Socket -> IO Packet
-recvPacket sock = do
-    h <- recv sock 20
-    b <- recv sock (getBodySizeFromHeader h)
+recvPacket s = do
+    h <- recv s 20
+    b <- recv s (getBodySizeFromHeader h)
     return $ decode (h <> b)
 
 makePdu :: [MIB] -> AgentT PDU
@@ -58,9 +58,9 @@ openSocket :: String -> IO Socket
 openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path) >> return x
 
 runAgent :: MIBTree MIB -> Socket -> IO ()
-runAgent tree sock = do
+runAgent tree socket'  = do
     s <- getSysUptime
-    let st = ST s (PacketID 1) (toZipper tree) sock
+    let st = ST s (PacketID 1) (toZipper tree) socket'
     evalStateT (register >> loop) st
 
 register :: AgentT ()
@@ -101,7 +101,7 @@ nextPID (PacketID x) = PacketID (succ x)
 
 getSysUptime :: IO SysUptime
 getSysUptime = do
-    t <- flip div' 1 <$> getPOSIXTime
+    (t :: Integer) <- flip div' 1 <$> getPOSIXTime
     return $ SysUptime $ fromIntegral t
 
 route :: Packet -> AgentT Packet

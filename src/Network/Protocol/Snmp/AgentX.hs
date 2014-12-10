@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Network.Protocol.Snmp.AgentX where
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Monads (agent)
 import Network.Protocol.Snmp.AgentX.MIBTree
-import Data.Tree
 import Network.Info
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
@@ -12,7 +12,7 @@ import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Applicative
 import Data.IORef
-import Control.Exception (catch, throwIO)
+import Control.Exception (throwIO)
 import Data.Monoid
 
 fixmon :: IO (MIBTree MIB)
@@ -56,7 +56,7 @@ fixmon = do
 
 time :: IO [MIB]
 time = do
-    t <- flip div' 1 <$> getPOSIXTime
+    (t :: Integer) <- flip div' 1 <$> getPOSIXTime
     return $ 
         [ mkObject 1 "Fixmon" "time" (Read time)
         , mkObjectType 0 "time" "description" (String "sysUptime")
