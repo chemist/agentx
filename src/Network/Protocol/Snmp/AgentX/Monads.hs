@@ -1,8 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Network.Protocol.Snmp.AgentX.Monads where
 
 import Network.Socket hiding (recv)
@@ -32,44 +28,18 @@ data ST = ST
 
 type AgentT = StateT ST IO
 
-newtype MibT a = MibT {unMibT :: AgentT a} deriving (Monad, MonadIO, Functor, Applicative)
-
-instance MonadState (Zipper MIB) MibT where
-    get = MibT $ do
-        x <- get
-        return $ (mibs x)
-    put x = MibT $ do
-        ST s p _ so <- get
-        put $ ST s p x so
+bridgeToBase :: Base a -> AgentT a
+bridgeToBase f = do
+    st <- get
+    (result, new) <- liftIO $ runStateT f (mibs st)
+    put (st { mibs = new })
+    return result
 
 recvPacket :: Socket -> IO Packet
 recvPacket sock = do
     h <- recv sock 20
     b <- recv sock (getBodySizeFromHeader h)
     return $ decode (h <> b)
-
-
-route :: Packet -> AgentT Packet
-route p@(Packet _ pdu _ _ _ _) = do
-    liftIO $ print pdu
-    case pdu of
-         Get _ oids -> getHandler oids p
-         _ -> undefined
-
-getHandler :: [OID] -> Packet -> AgentT Packet
-getHandler oids p = do
-    pdu <- makePdu =<< getHandler' oids
-    let (Packet v _ flags sid tid pid) = p
-    return $ Packet v pdu flags sid tid pid
-    where
-        getHandler' :: [OID] -> AgentT [MIB]
-        getHandler' [] = return []
-        getHandler' (x:xs) = do
-            z <- mibs <$> get
-            (:) <$> (liftIO $ evalStateT (findR x) z) <*> getHandler' xs
---        getH :: [OID] -> AgentT [MIB]
---        getH (x:xs) = (:) <$> lift (findR x) <*> getH xs
-
 
 makePdu :: [MIB] -> AgentT PDU
 makePdu xs = do
@@ -82,20 +52,16 @@ mibToVarBind y = VarBind (oid y) (getValue y)
 agent :: String -> MIBTree MIB -> IO ()
 agent path tree = bracket (openSocket path)
                           close
-                          (runSnmp tree)
+                          (runAgent tree)
                               
 openSocket :: String -> IO Socket
-openSocket path = do
-    sock <- socket AF_UNIX Stream 0
-    connect sock (SockAddrUnix path)
-    return sock
+openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path) >> return x
 
-loop :: AgentT ()
-loop = forever $ do
-    s <- sock <$> get
-    request <- liftIO $ recvPacket s
-    response <- route request -- need catch here
-    liftIO $ sendAll s (encode response)
+runAgent :: MIBTree MIB -> Socket -> IO ()
+runAgent tree sock = do
+    s <- getSysUptime
+    let st = ST s (PacketID 1) (toZipper tree) sock
+    evalStateT (register >> loop) st
 
 register :: AgentT ()
 register = do
@@ -119,13 +85,16 @@ register = do
       getPid (Packet _ _ _ _ _ x) = x
       getTid (Packet _ _ _ _ x _) = x
       getSid (Packet _ _ _ x _ _) = x
+      mibToRegisterPdu :: MIB -> PDU
+      mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
 
+loop :: AgentT ()
+loop = forever $ do
+    s <- sock <$> get
+    request <- liftIO $ recvPacket s
+    response <- route request -- need catch here
+    liftIO $ sendAll s (encode response)
 
-runSnmp :: MIBTree MIB -> Socket -> IO ()
-runSnmp tree sock = do
-    s <- getSysUptime
-    let st = ST s (PacketID 1) (toZipper tree) sock
-    evalStateT (register >> loop) st
 
 nextPID :: PacketID -> PacketID
 nextPID (PacketID x) = PacketID (succ x)
@@ -135,6 +104,20 @@ getSysUptime = do
     t <- flip div' 1 <$> getPOSIXTime
     return $ SysUptime $ fromIntegral t
 
-mibToRegisterPdu :: MIB -> PDU
-mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
+route :: Packet -> AgentT Packet
+route p@(Packet _ pdu _ _ _ _) = do
+    liftIO $ print pdu
+    case pdu of
+         Get _ oids -> getHandler oids p
+         _ -> undefined
+
+getHandler :: [OID] -> Packet -> AgentT Packet
+getHandler oids p = do
+    pdu <- makePdu =<< getHandler' oids
+    let (Packet v _ flags sid tid pid) = p
+    return $ Packet v pdu flags sid tid pid
+    where
+        getHandler' :: [OID] -> AgentT [MIB]
+        getHandler' [] = return []
+        getHandler' (x:xs) = (:) <$> bridgeToBase (findR x) <*> getHandler' xs
 

@@ -1,13 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FlexibleContexts #-}
 module Network.Protocol.Snmp.AgentX.MIBTree 
 ( MIB
+, Base
 , oid
 , name
 , mkObject
@@ -138,13 +133,10 @@ private = Module [1,3,6,1,4] 4 "internet" "private"
 enterprise :: MIB 
 enterprise = Module [1,3,6,1,4,1] 1 "private" "enterprise"
 
-data MIBException = NotFoundParent 
-                  | CantUseLinkHere
-                  | CantRereadMIB
-                  | NotFound OID
-                  | NotSuch OID
+data MIBException = CantUseLinkHere
                   | NotDescribedUpdate
-                  | HasSuchObject deriving (Show, Typeable)
+                  | HasSuchObject 
+                  deriving (Show, Typeable)
 
 instance Exception MIBException
 
@@ -299,14 +291,14 @@ top :: Zipper a -> Zipper a
 top (t,[]) = (t,[])  
 top z = top (fromJust $ goUp z)
 
-type Base m a = forall . (MonadState (Zipper MIB) m, MonadIO m, Functor m, Applicative m) => m a
+type Base = StateT (Zipper MIB) IO
 
 getUpdate :: MIB -> Update
 getUpdate Module{} = Fixed
 getUpdate (Object _ _ _ _ u) = u
 getUpdate (ObjectType _ _ _ _ _) = Fixed
 
-update :: Maybe [(OID, Value)] -> Base m ()
+update :: Maybe [(OID, Value)] -> Base ()
 update mv = do
     c <-  getFocus <$> get
     case getUpdate c of
@@ -324,16 +316,16 @@ update mv = do
                   Right n' -> modify $ attach (fromListWithFirst c n')
                   Left (e :: SomeException) -> liftIO $ print e
 
-findR :: OID -> Base m MIB
+findR :: OID -> Base MIB
 findR = findOID Nothing
 
-updateOne :: OID -> Value -> Base m MIB
+updateOne :: OID -> Value -> Base MIB
 updateOne o v = findOID (Just [(o,v)]) o 
 
-updateMulti :: [(OID, Value)] -> Base m [MIB]
+updateMulti :: [(OID, Value)] -> Base [MIB]
 updateMulti (x:xs) = (:) <$> updateOne (fst x) (snd x) <*> updateMulti xs
 
-notFound :: OID -> Base m MIB
+notFound :: OID -> Base MIB
 notFound oid = do
     b <- get
     case goUp b of
@@ -346,13 +338,13 @@ notFound oid = do
                   Module{} -> return $ mkObject' oid
                   ObjectType{} -> return $ mkObjectType' oid 
 
-findOID :: Maybe [(OID, Value)] -> OID -> Base m MIB
+findOID :: Maybe [(OID, Value)] -> OID -> Base MIB
 findOID mv xs = do
     modify top
     c <- getFocus <$> get
     maybe (return $ mkObject' xs) (\x -> findOID' mv x xs) $ L.stripPrefix (L.init $ oid c) xs
     where
-      findOID' :: Maybe [(OID, Value)] -> OID -> OID -> Base m MIB
+      findOID' :: Maybe [(OID, Value)] -> OID -> OID -> Base MIB
       findOID' mv [x] ys = do
           c <- getFocus <$> get
           if int c == x
