@@ -54,6 +54,7 @@ import qualified Data.List as L
 data MIB = Module OID Integer Parent Name
          | Object OID Integer Parent Name Update
          | ObjectType OID Integer Parent Name Value 
+         | TempMib Integer
          deriving (Show, Eq)
 
 getValue :: MIB -> Value
@@ -74,15 +75,19 @@ instance Items MIB where
     parent (Module _ _ x _) = x
     parent (Object _ _ x _ _) = x
     parent (ObjectType _ _ x _ _) = x
+    parent _ = throw BadTempMib
     name (Module _ _ _ x) = x
     name (Object _ _ _ x _) = x
     name (ObjectType _ _ _ x _) = x
+    name _ = throw BadTempMib
     int (Module _ x _ _) = x
     int (Object _ x _ _ _) = x
     int (ObjectType _ x _ _ _) = x
+    int (TempMib x) = x
     oid (Module x _ _ _) = x
     oid (Object x _ _ _ _) = x
     oid (ObjectType x _ _ _ _) = x
+    oid _ = throw BadTempMib
 
 data Update = Fixed
             | Read (IO [MIB])
@@ -106,11 +111,6 @@ data MIBTree a =
          , next :: MIBTree a
          , link :: MIBTree a
          }          
-    | Link
-         { node :: Integer
-         , next :: MIBTree a
-         , link :: MIBTree a
-         }
     | Empty
     deriving (Show, Eq)
 
@@ -133,7 +133,7 @@ private = Module [1,3,6,1,4] 4 "internet" "private"
 enterprise :: MIB 
 enterprise = Module [1,3,6,1,4,1] 1 "private" "enterprise"
 
-data MIBException = CantUseLinkHere
+data MIBException = BadTempMib
                   | NotDescribedUpdate
                   | HasSuchObject 
                   deriving (Show, Typeable)
@@ -143,30 +143,27 @@ instance Exception MIBException
 instance Functor MIBTree where
     fmap f Empty = Empty
     fmap f (Fork o next link) = Fork (f o) (fmap f next) (fmap f link) 
-    fmap f (Link i next link) = Link i (fmap f next) (fmap f link) 
-
 
 singleton :: MIB -> MIBTree MIB
 singleton m = singleton' (oid m, m) 
     where
     singleton' ([x], m) = Fork m Empty Empty
-    singleton' ((x:xs), m) = Link x Empty $ singleton' (xs, m)
+    singleton' ((x:xs), m) = Fork (TempMib x) Empty $ singleton' (xs, m)
 
 insert :: MIBTree MIB -> MIBTree MIB -> MIBTree MIB
 insert x Empty = x
 insert Empty x = x
-insert yt@Link{} xt@Fork{} = insert xt yt
-insert xt@(Link ix nx lx) yt@(Link iy ny ly) 
-        | ix == iy = Link ix (nx `insert` ny) (lx `insert` ly)
-        | otherwise = Link ix (nx `insert` yt) lx
-insert xt@(Fork x nx lx) yt@(Link i ny ly)
-        | int x == i = Fork x (nx `insert` ny) (lx `insert` ly)
-        | otherwise = Fork x (nx `insert` yt) lx
 insert xt@(Fork x nx lx) yt@(Fork y ny ly) 
         | int x == int y = Fork (x `splitMIB` y) (nx `insert` ny) (lx `insert` ly)
         | otherwise = Fork x (nx `insert` yt) lx
         where
         splitMIB :: MIB -> MIB -> MIB
+        splitMIB (TempMib x) (TempMib y) | x == y = TempMib x
+                                         | otherwise = throw HasSuchObject
+        splitMIB (TempMib x) y | int y == x = y
+                               | otherwise = throw HasSuchObject
+        splitMIB y (TempMib x) | int y == x = y
+                               | otherwise = throw HasSuchObject
         splitMIB x y | x == y = x
                      | otherwise = throw HasSuchObject
 
@@ -181,12 +178,14 @@ fromListWithBase n m xs =
     let full = foldl1 insert . map singleton . makePartedOid [(n,m)] $ xs
     in dropParted full
     where
-    dropParted x@Fork{} = x
-    dropParted (Link _ Empty l) = dropParted l
+    dropParted x@(Fork m _ l) = if isTempMib m
+                                     then dropParted l
+                                     else x
+    isTempMib TempMib{} = True
+    isTempMib _ = False
 
 toList :: MIBTree MIB -> [MIB]
 toList Empty = []
-toList (Link _ n l) = toList n <> toList l
 toList (Fork o n l) = o : toList n <> toList l
 
 find :: OID -> MIBTree MIB -> Maybe MIB
@@ -202,7 +201,6 @@ printTree :: MIBTree MIB -> IO ()
 printTree f = putStr $ unlines $ drawLevel f
   where
     drawLevel Empty = []
-    drawLevel (Link i next level) = ("Temp node: " <> show i) : (drawSubtree next level)
     drawLevel (Fork o next level) = (show o) : (drawSubtree next level)
     
     drawSubtree next level = (shift "`- " " | " (drawLevel level)) <> drawLevel next
@@ -224,6 +222,7 @@ addOid :: OID -> MIB -> MIB
 addOid oid (Module _ i p n ) = Module (oid <> [i]) i p n
 addOid oid (Object _ i p n u) = Object (oid <> [i]) i p n u
 addOid oid (ObjectType _ i p n v) = ObjectType (oid <> [i]) i p n v
+addOid _ _ = throw BadTempMib
 
 makePartedOid :: [(Name, OID)] -> [MIB] -> [MIB]
 makePartedOid _ [] = []
@@ -260,7 +259,6 @@ type Zipper a = (MIBTree a, Moving a)
 change :: (a -> a) -> Zipper a -> Zipper a
 change f (Empty, bs) = (Empty, bs)
 change f (Fork a n l, bs) = (Fork (f a) n l, bs)
-change f (Link a n l, bs) = (Link a n l, bs) -- here must be replace 
 
 attach :: MIBTree a -> Zipper a -> Zipper a
 attach t (_, bs) = (t, bs)
@@ -268,12 +266,10 @@ attach t (_, bs) = (t, bs)
 goNext :: Zipper a -> Maybe (Zipper a)
 goNext (Fork a Empty l, bs) = Nothing
 goNext (Fork a n l, bs) = Just (n, Next a l:bs)
-goNext (Link a n l, bs) = throw CantUseLinkHere
 
 goLevel :: Zipper a -> Maybe (Zipper a)
 goLevel (Fork a n Empty, bs) = Nothing
 goLevel (Fork a n l, bs) = Just (l, Level a n:bs)
-goLevel (Link a n l, bs) = throw CantUseLinkHere
 
 goUp :: Zipper a -> Maybe (Zipper a)
 goUp (t, []) = Nothing
@@ -298,6 +294,7 @@ getUpdate :: MIB -> Update
 getUpdate Module{} = Fixed
 getUpdate (Object _ _ _ _ u) = u
 getUpdate (ObjectType _ _ _ _ _) = Fixed
+getUpdate _ = Fixed
 
 update :: Maybe [(OID, Value)] -> Base ()
 update mv = do
@@ -338,6 +335,7 @@ notFound oid = do
                   Object{} -> return $ mkObject' oid
                   Module{} -> return $ mkObject' oid
                   ObjectType{} -> return $ mkObjectType' oid 
+                  _ -> throw BadTempMib
 
 findOID :: Maybe [(OID, Value)] -> OID -> Base MIB
 findOID mv xs = do
