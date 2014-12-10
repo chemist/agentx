@@ -41,15 +41,15 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 )
 where
 
+import Data.Typeable (Typeable)
+import Data.Monoid ((<>))
+import Data.Maybe (fromJust)
+import Data.List (stripPrefix, init)
+import Control.Monad.State (StateT, get, liftIO, modify, put)
+import Control.Applicative ((<$>), (<*>))
+import Control.Exception (Exception, throw, try, SomeException)
+
 import Network.Protocol.Snmp (Value(..), OID)
-import Control.Exception
-import Data.Monoid
-import Data.Typeable
-import Control.Applicative
-import Data.Tree
-import Data.Maybe 
-import Control.Monad.State 
-import qualified Data.List as L
 
 data MIB = Module OID Integer Parent Name
          | Object OID Integer Parent Name Update
@@ -341,7 +341,7 @@ findOID :: Maybe [(OID, Value)] -> OID -> Base MIB
 findOID mv xs = do
     modify top
     c <- getFocus <$> get
-    maybe (return $ mkObject' xs) (\x -> findOID' mv x xs) $ L.stripPrefix (L.init $ oid c) xs
+    maybe (return $ mkObject' xs) (\x -> findOID' mv x xs) $ stripPrefix (init $ oid c) xs
     where
       findOID' :: Maybe [(OID, Value)] -> OID -> OID -> Base MIB
       findOID' mv [x] ys = do
