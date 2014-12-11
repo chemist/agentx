@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Network.Protocol.Snmp.AgentX.Monads where
+module Network.Protocol.Snmp.AgentX.Service where
 
 import Network.Socket hiding (recv)
 import Network.Socket.ByteString.Lazy
@@ -14,40 +14,19 @@ import qualified Data.Foldable as F
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 
-import Network.Protocol.Snmp (OID)
-import Network.Protocol.Snmp.AgentX.Types hiding (getValue)
+-- import Network.Protocol.Snmp (OID)
+import Network.Protocol.Snmp.AgentX.Protocol hiding (getValue)
 import Network.Protocol.Snmp.AgentX.MIBTree
+import Network.Protocol.Snmp.AgentX.Handlers
+import Network.Protocol.Snmp.AgentX.Types
 -- import Debug.Trace
-
-data ST = ST
-  { sysuptime :: SysUptime
-  , packetCounter :: PacketID
-  , mibs :: Zipper MIB
-  , sock :: Socket
-  }
-
-type AgentT = StateT ST IO
-
-bridgeToBase :: Base a -> AgentT a
-bridgeToBase f = do
-    st <- get
-    (result, new) <- liftIO $ runStateT f (mibs st)
-    put (st { mibs = new })
-    return result
+--
 
 recvPacket :: Socket -> IO Packet
 recvPacket s = do
     h <- recv s 20
     b <- recv s (getBodySizeFromHeader h)
     return $ decode (h <> b)
-
-makePdu :: [MIB] -> AgentT PDU
-makePdu xs = do
-  now <- sysuptime <$> get
-  return $ Response now NoAgentXError (Index 0) $ map mibToVarBind xs
-
-mibToVarBind :: MIB -> VarBind
-mibToVarBind y = VarBind (oid y) (getValue y)
 
 agent :: String -> MIBTree MIB -> IO ()
 agent path tree = bracket (openSocket path)
@@ -103,21 +82,4 @@ getSysUptime :: IO SysUptime
 getSysUptime = do
     (t :: Integer) <- flip div' 1 <$> getPOSIXTime
     return $ SysUptime $ fromIntegral t
-
-route :: Packet -> AgentT Packet
-route p@(Packet _ pdu _ _ _ _) = do
-    liftIO $ print pdu
-    case pdu of
-         Get _ oids -> getHandler oids p
-         _ -> undefined
-
-getHandler :: [OID] -> Packet -> AgentT Packet
-getHandler oids p = do
-    pdu <- makePdu =<< getHandler' oids
-    let (Packet v _ flags sid tid pid) = p
-    return $ Packet v pdu flags sid tid pid
-    where
-        getHandler' :: [OID] -> AgentT [MIB]
-        getHandler' [] = return []
-        getHandler' (x:xs) = (:) <$> bridgeToBase (findR x) <*> getHandler' xs
 

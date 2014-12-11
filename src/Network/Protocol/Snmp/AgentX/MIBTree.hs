@@ -30,32 +30,40 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , attach
 , change
 , getFocus
+, focus
 , top
 , fromListWithBase
 , fromListWithFirst
 , findOID
 , findR
+, findNext
 , updateOne
 , updateMulti
 , MIBException(..)
+, walk
 )
 where
 
 import Data.Typeable (Typeable)
 import Data.Monoid ((<>))
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, isJust)
 import Data.List (stripPrefix)
 import Control.Monad.State (StateT, get, liftIO, modify, put)
+import Control.Monad
 import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw, try, SomeException)
 
 import Network.Protocol.Snmp (Value(..), OID)
+import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..))
 
 data MIB = Module OID Integer Parent Name
          | Object OID Integer Parent Name Update
          | ObjectType OID Integer Parent Name Value 
          | TempMib Integer
          deriving (Eq)
+
+instance Ord MIB where
+    compare x y = compare (oid x) (oid y)
 
 instance Show MIB where
     show (Module o i p n) = "Module " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n
@@ -384,4 +392,90 @@ findOID mv xs = do
       modifyMaybe f = do
           st <- f <$> get
           maybe (return False) (\x -> put x >> return True) st
+
+walk :: OID -> Base ()
+walk xs = do
+    modify top
+    c <- getFocus <$> get
+    maybe (return ()) (\x -> walk' (Object xs (last xs) "" "" Fixed) x) $ stripPrefix (init $ oid c) xs
+    where
+        walk' :: MIB -> OID -> Base ()
+        walk' _ [] = return ()
+        walk' m (x:ys) = do
+            c <- getFocus <$> get
+            update Nothing
+            l <- isLevel
+            n <- isNext
+            let r = compare x (int c)
+            case (r, l, n) of
+                 (EQ, True, _) -> do
+                     unless (ys == []) $ modify $ fromJust . goLevel
+                     walk' m ys
+                 (GT, _, True) -> do
+                     modify $ fromJust . goNext
+                     walk' m (x:ys)
+                 _ -> return ()
+
+focus :: Base ()
+focus = liftIO . print =<< getFocus <$> get
+   
+
+
+findNext :: SearchRange -> Base MIB
+findNext (SearchRange (start, _end)) = do
+    modify top 
+    c <- getFocus <$> get
+    maybe (return c) (\x -> findNext' x (Object start 0 "" "" Fixed)) $ stripPrefix (init $ oid c) start
+    where
+      findNext' :: OID -> MIB -> Base MIB
+      findNext' xs m = do
+          c <- getFocus <$> get
+          let r = compare m c
+          l <- isLevel
+          n <- isNext
+          liftIO $ print $ "current: " <> show c
+          liftIO $ print $ "needed : " <> show m
+          liftIO $ print $ "compare " <> show r <> " isLevel " <> show l <> " isNext " <> show n
+          case (r, l, n) of
+               (GT, True, _) -> do
+                   liftIO $ print "one"
+                   modify $ fromJust . goLevel
+                   findNext' (safeTail xs) m
+               (GT, False, True) -> do
+                   liftIO $ print "two"
+                   modify $ fromJust . goUp
+                   modify $ fromJust . goNext
+                   findNext' (safeTail xs) m
+               (LT, True, True) -> do
+                   liftIO $ print "lt true true"
+                   modify $ fromJust . goUp
+                   modify $ fromJust . goNext
+                   findNext' (oid c) c
+               (LT, True, False) -> do
+                   liftIO $ print "lt true false"
+                   return c
+               (EQ, True, _) -> do
+                   liftIO $ print "three"
+                   modify $ fromJust . goLevel
+                   getFocus <$> get
+               (EQ, False, True) -> do
+                   liftIO $ print "three"
+                   modify $ fromJust . goNext
+                   getFocus <$> get
+               _ -> error "new []"
+
+      modifyMaybe f = do
+          st <- f <$> get
+          maybe (return False) (\x -> put x >> return True) st
+
+safeTail [] = []
+safeTail (_:xs) = xs
+isLevel = do
+    st <- get
+    return $ isJust (goLevel st)
+isNext = do
+    st <- get
+    return $ isJust (goNext st)
+
+
 

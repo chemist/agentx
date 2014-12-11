@@ -3,7 +3,7 @@
 module Network.Protocol.Snmp.AgentX where
 
 import Network.Protocol.Snmp (Value(..), OID)
-import Network.Protocol.Snmp.AgentX.Monads (agent)
+import Network.Protocol.Snmp.AgentX.Service (agent)
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Info
 import qualified Network.Info as NI
