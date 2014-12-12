@@ -1,10 +1,10 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Network.Protocol.Snmp.AgentX.MIBTree 
 ( MIB
 , Base
-, oid
-, name
 , mkObject
 , mkModule
 , mkObjectType
@@ -20,8 +20,8 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , find
 , printTree
 , Update(..)
+, UTree(..)
 , MIBTree(..)
-, getValue
 , toZipper
 , Zipper
 , goNext
@@ -34,31 +34,30 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , top
 , fromListWithBase
 , fromListWithFirst
-, findOID
-, findR
+, findOne
+, findMany
 , findNext
-, updateOne
-, updateMulti
 , MIBException(..)
-, walk
+, goClosest
+, Items(..)
 )
 where
 
 import Data.Typeable (Typeable)
 import Data.Monoid ((<>))
-import Data.Maybe (fromJust, isJust)
+import Data.Maybe (fromJust, isJust, fromMaybe)
 import Data.List (stripPrefix)
-import Control.Monad.State (StateT, get, liftIO, modify, put)
+import Control.Monad.State (StateT, get, liftIO, modify)
 import Control.Monad
 import Control.Applicative ((<$>), (<*>))
-import Control.Exception (Exception, throw, try, SomeException)
+import Control.Exception (Exception, throw)
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..))
 
 data MIB = Module OID Integer Parent Name
-         | Object OID Integer Parent Name Update
-         | ObjectType OID Integer Parent Name Value 
+         | Object OID Integer Parent Name (Maybe UTree)
+         | ObjectType OID Integer Parent Name Value Update
          | TempMib Integer
          deriving (Eq)
 
@@ -67,18 +66,13 @@ instance Ord MIB where
 
 instance Show MIB where
     show (Module o i p n) = "Module " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n
-    show (Object o i p n _) = "Object " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n
-    show (ObjectType o i p n v) = "ObjectType " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n <> " " <> show v
+    show (Object o i p n u) = "Object " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n <> " " <> show u
+    show (ObjectType o i p n v u) = "ObjectType " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n <> " " <> show v <> " " <> show u
     show (TempMib x) = "TempMib " <> show x
 
 oidToString :: OID -> String
 oidToString [] = ""
 oidToString xs = init $ foldr (\a b -> show a <> "." <> b) "" xs
-
-getValue :: MIB -> Value
-getValue (ObjectType _ _ _ _ v) = v
-getValue (Object _ _ _ _ _) = NoSuchObject
-getValue _ = NoSuchInstance
 
 type Parent = String
 type Name = String
@@ -88,28 +82,35 @@ class Items a where
     name   :: a -> Name
     int    :: a -> Integer
     oid    :: a -> OID
+    val    :: a -> Value
+    upd    :: a -> Update
 
 instance Items MIB where
+    val (ObjectType _ _ _ _ v _) = v
+    val _ = NoSuchObject
+    upd (ObjectType _ _ _ _ _ u) = u
+    upd _ = Fixed
     parent (Module _ _ x _) = x
     parent (Object _ _ x _ _) = x
-    parent (ObjectType _ _ x _ _) = x
+    parent (ObjectType _ _ x _ _ _) = x
     parent _ = throw BadTempMib
     name (Module _ _ _ x) = x
     name (Object _ _ _ x _) = x
-    name (ObjectType _ _ _ x _) = x
+    name (ObjectType _ _ _ x _ _) = x
     name _ = throw BadTempMib
     int (Module _ x _ _) = x
     int (Object _ x _ _ _) = x
-    int (ObjectType _ x _ _ _) = x
+    int (ObjectType _ x _ _ _ _) = x
     int (TempMib x) = x
     oid (Module x _ _ _) = x
     oid (Object x _ _ _ _) = x
-    oid (ObjectType x _ _ _ _) = x
+    oid (ObjectType x _ _ _ _ _) = x
     oid _ = throw BadTempMib
 
 data Update = Fixed
-            | Read (IO [MIB])
-            | ReadWrite (IO [MIB]) ([(OID, Value)] -> IO ())
+            | Read (IO Value)
+            | ReadWrite (IO Value) (Value -> IO ())
+            
 
 instance Eq Update where
     _ == _ = True
@@ -119,6 +120,14 @@ instance Show Update where
     show (Read _) = "read-only"
     show (ReadWrite _ _) = "read-write"
 
+newtype UTree = UTree (IO [MIB])
+
+instance Show UTree where
+    show _ = "dynamic"
+
+instance Eq UTree where
+    _ == _ = True
+                
 
 data MIBTree a = 
     Fork { object :: a
@@ -148,6 +157,7 @@ enterprise :: MIB
 enterprise = Module [1,3,6,1,4,1] 1 "private" "enterprise"
 
 data MIBException = BadTempMib
+                  | CantReadValue
                   | NotDescribedUpdate
                   | HasSuchObject 
                   deriving (Show, Typeable)
@@ -238,7 +248,7 @@ makeOid xs = makeOid' [] xs
 addOid :: OID -> MIB -> MIB
 addOid o (Module _ i p n ) = Module (o <> [i]) i p n
 addOid o (Object _ i p n u) = Object (o <> [i]) i p n u
-addOid o (ObjectType _ i p n v) = ObjectType (o <> [i]) i p n v
+addOid o (ObjectType _ i p n v u) = ObjectType (o <> [i]) i p n v u
 addOid _ _ = throw BadTempMib
 
 makePartedOid :: [(Name, OID)] -> [MIB] -> [MIB]
@@ -251,17 +261,12 @@ makePartedOid base (x:xs) =
 mkModule :: Integer -> Parent -> Name -> MIB
 mkModule = Module [] 
 
-mkObject :: Integer -> Parent -> Name -> Update -> MIB
+mkObject :: Integer -> Parent -> Name -> Maybe UTree -> MIB
 mkObject = Object []
 
-mkObject' :: OID -> MIB
-mkObject' o = Object o (last o) "" "" Fixed
-
-mkObjectType :: Integer -> Parent -> Name -> Value -> MIB
+mkObjectType :: Integer -> Parent -> Name -> Value -> Update -> MIB
 mkObjectType = ObjectType []
 
-mkObjectType' :: OID -> MIB
-mkObjectType' o = ObjectType o (last o) "" "" NoSuchInstance 
 
 ---------------------------------------------------------------------------------------------------------
 -- zipper
@@ -310,172 +315,84 @@ top z = top (fromJust $ goUp z)
 
 type Base = StateT (Zipper MIB) IO
 
-getUpdate :: MIB -> Update
-getUpdate Module{} = Fixed
-getUpdate (Object _ _ _ _ u) = u
-getUpdate (ObjectType _ _ _ _ _) = Fixed
-getUpdate _ = Fixed
+update :: Maybe Value -> MIB -> Base MIB
+update mv m = case upd m of
+                Fixed -> return m
+                Read fun -> setValue m <$> liftIO fun 
+                ReadWrite reread write -> do
+                    let newMib = maybe m (setValue m) mv
+                    liftIO $ write (val newMib)
+                    setValue newMib <$> liftIO reread
 
-update :: Maybe [(OID, Value)] -> Base ()
-update mv = do
-    c <-  getFocus <$> get
-    case getUpdate c of
-         Fixed -> return ()
-         Read reread -> do
-             liftIO $ print "reread"
-             n <- liftIO $ try reread 
-             case n of
-                  Right n' -> modify $ attach (fromListWithFirst c n')
-                  Left (e :: SomeException) -> liftIO $ print e
-         ReadWrite reread write -> do
-             maybe (return ()) (liftIO . write) mv
-             n <- liftIO $ try reread
-             case n of
-                  Right n' -> modify $ attach (fromListWithFirst c n')
-                  Left (e :: SomeException) -> liftIO $ print e
-
-findR :: OID -> Base MIB
-findR = findOID Nothing
-
-updateOne :: OID -> Value -> Base MIB
-updateOne o v = findOID (Just [(o,v)]) o 
-
-updateMulti :: [(OID, Value)] -> Base [MIB]
-updateMulti [] = return []
-updateMulti (x:xs) = (:) <$> updateOne (fst x) (snd x) <*> updateMulti xs
-
-notFound :: OID -> Base MIB
-notFound o = do
-    b <- get
-    case goUp b of
-         Nothing -> return $ mkObject' o
-         Just nb -> do
-             put nb
-             c <- getFocus <$> get
-             case c of
-                  Object{} -> return $ mkObject' o
-                  Module{} -> return $ mkObject' o
-                  ObjectType{} -> return $ mkObjectType' o 
-                  _ -> throw BadTempMib
-
-findOID :: Maybe [(OID, Value)] -> OID -> Base MIB
-findOID mv xs = do
-    modify top
+updateTree :: Base ()
+updateTree = do
     c <- getFocus <$> get
-    maybe (return $ mkObject' xs) (\x -> findOID' mv x xs) $ stripPrefix (init $ oid c) xs
+    case isDynamic c of
+       Just (UTree fun) -> do
+           n <- liftIO fun 
+           modify $ attach $ fromListWithFirst c n
+       Nothing -> return ()
     where
-      findOID' :: Maybe [(OID, Value)] -> OID -> OID -> Base MIB
-      findOID' _ [] _ = undefined
-      findOID' mvv [x] ys = do
-          c <- getFocus <$> get
-          if int c == x
-             then update mvv >> return c
-             else do
-                 isOk <- modifyMaybe goNext
-                 if isOk
-                    then findOID' mvv [x] ys
-                    else notFound ys
-      findOID' mvv (x:xss) ys = do
-          c <- getFocus <$> get
-          if int c == x
-             then do
-                 update mvv -- if not last object, is save must be denied?
-                 isOk <- modifyMaybe goLevel 
-                 if  isOk 
-                    then findOID' mvv xss ys
-                    else notFound ys
-             else do
-                 isOk <- modifyMaybe goNext
-                 if isOk
-                    then findOID' mvv (x:xss) ys
-                    else notFound ys
-      modifyMaybe f = do
-          st <- f <$> get
-          maybe (return False) (\x -> put x >> return True) st
+    isDynamic (Object _ _ _ _ x) = x
+    isDynamic _ = Nothing
 
-walk :: OID -> Base ()
-walk xs = do
+
+
+setValue :: MIB -> Value -> MIB
+setValue (ObjectType o i p n _ u) v = ObjectType o i p n v u
+setValue _ _ = throw CantReadValue
+
+goClosest :: OID -> Base ()
+goClosest xs = do
     modify top
-    c <- getFocus <$> get
-    maybe (return ()) (\x -> walk' (Object xs (last xs) "" "" Fixed) x) $ stripPrefix (init $ oid c) xs
+    o <- oid . getFocus <$> get
+    walk' $ fromMaybe [] (stripPrefix (init o) xs)
     where
-        walk' :: MIB -> OID -> Base ()
-        walk' _ [] = return ()
-        walk' m (x:ys) = do
-            c <- getFocus <$> get
-            update Nothing
-            l <- isLevel
-            n <- isNext
-            let r = compare x (int c)
-            case (r, l, n) of
-                 (EQ, True, _) -> do
+        walk' :: OID -> Base ()
+        walk' [] = return ()
+        walk' (x:ys) = do
+            c <- int . getFocus <$> get
+            l <- hasLevel
+            n <- hasNext
+            case (x == c, l, n) of
+                 (True, True, _) -> do
+                     updateTree
                      unless (ys == []) $ modify $ fromJust . goLevel
-                     walk' m ys
-                 (GT, _, True) -> do
+                     walk' ys
+                 (False, _, True) -> do
                      modify $ fromJust . goNext
-                     walk' m (x:ys)
+                     walk' (x:ys)
                  _ -> return ()
+
+findOne :: OID -> Base MIB
+findOne xs = do
+    goClosest xs
+    o <- oid . getFocus <$> get
+    t <- isObjectType . getFocus <$> get
+    case (o == xs, t) of
+         (True, True) -> update Nothing=<< getFocus <$> get
+         (True, False) -> return $ ObjectType o (last o) "" "" NoSuchObject Fixed
+         _ -> return $ ObjectType o (last o) "" "" NoSuchInstance Fixed
+
+findMany :: [OID] -> Base [MIB]
+findMany [] = return []
+findMany (x:xs) = (:) <$> findOne x <*> findMany xs
+
+isObjectType :: MIB -> Bool
+isObjectType ObjectType{} = True
+isObjectType _            = False
 
 focus :: Base ()
 focus = liftIO . print =<< getFocus <$> get
-   
-
 
 findNext :: SearchRange -> Base MIB
-findNext (SearchRange (start, _end)) = do
-    modify top 
-    c <- getFocus <$> get
-    maybe (return c) (\x -> findNext' x (Object start 0 "" "" Fixed)) $ stripPrefix (init $ oid c) start
-    where
-      findNext' :: OID -> MIB -> Base MIB
-      findNext' xs m = do
-          c <- getFocus <$> get
-          let r = compare m c
-          l <- isLevel
-          n <- isNext
-          liftIO $ print $ "current: " <> show c
-          liftIO $ print $ "needed : " <> show m
-          liftIO $ print $ "compare " <> show r <> " isLevel " <> show l <> " isNext " <> show n
-          case (r, l, n) of
-               (GT, True, _) -> do
-                   liftIO $ print "one"
-                   modify $ fromJust . goLevel
-                   findNext' (safeTail xs) m
-               (GT, False, True) -> do
-                   liftIO $ print "two"
-                   modify $ fromJust . goUp
-                   modify $ fromJust . goNext
-                   findNext' (safeTail xs) m
-               (LT, True, True) -> do
-                   liftIO $ print "lt true true"
-                   modify $ fromJust . goUp
-                   modify $ fromJust . goNext
-                   findNext' (oid c) c
-               (LT, True, False) -> do
-                   liftIO $ print "lt true false"
-                   return c
-               (EQ, True, _) -> do
-                   liftIO $ print "three"
-                   modify $ fromJust . goLevel
-                   getFocus <$> get
-               (EQ, False, True) -> do
-                   liftIO $ print "three"
-                   modify $ fromJust . goNext
-                   getFocus <$> get
-               _ -> error "new []"
+findNext (SearchRange (_start, _end)) = undefined
 
-      modifyMaybe f = do
-          st <- f <$> get
-          maybe (return False) (\x -> put x >> return True) st
+hasLevel :: StateT (Zipper MIB) IO Bool
+hasLevel = isJust . goLevel <$> get
 
-safeTail [] = []
-safeTail (_:xs) = xs
-isLevel = do
-    st <- get
-    return $ isJust (goLevel st)
-isNext = do
-    st <- get
-    return $ isJust (goNext st)
+hasNext :: StateT (Zipper MIB) IO Bool
+hasNext = isJust . goNext <$> get
 
 
 

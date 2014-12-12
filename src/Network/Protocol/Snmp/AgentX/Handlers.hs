@@ -14,14 +14,14 @@ makePdu xs = do
   return $ Response now NoAgentXError (Index 0) $ map mibToVarBind xs
 
 mibToVarBind :: MIB -> VarBind
-mibToVarBind y = VarBind (oid y) (getValue y)
+mibToVarBind y = VarBind (oid y) (val y)
 
 route :: Packet -> AgentT Packet
 route p@(Packet _ pdu _ _ _ _) = do
     liftIO $ print pdu
-    pdu <- makePdu =<< route'    
+    pdu' <- makePdu =<< route'    
     let (Packet v _ flags sid tid pid) = p
-    return $ Packet v pdu flags sid tid pid
+    return $ Packet v pdu' flags sid tid pid
     where
       route' = case pdu of
                     Get _ oids -> getHandler oids
@@ -30,8 +30,7 @@ route p@(Packet _ pdu _ _ _ _) = do
 
 
 getHandler :: [OID] -> AgentT [MIB]
-getHandler [] = return []
-getHandler (x:xs) = (:) <$> bridgeToBase (findR x) <*> getHandler xs
+getHandler xs = bridgeToBase (findMany xs) 
 
 {--
 7.2.3.2.  Subagent Processing of the agentx-GetNext-PDU
