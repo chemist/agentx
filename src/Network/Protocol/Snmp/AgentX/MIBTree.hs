@@ -46,8 +46,8 @@ where
 import Data.Typeable (Typeable)
 import Data.Monoid ((<>))
 import Data.Maybe (fromJust, isJust, fromMaybe)
-import Data.List (stripPrefix)
-import Control.Monad.State (StateT, get, liftIO, modify)
+import Data.List (stripPrefix, sort)
+import Control.Monad.State (StateT, get, put, liftIO, modify)
 import Control.Monad
 import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw)
@@ -160,6 +160,7 @@ data MIBException = BadTempMib
                   | CantReadValue
                   | NotDescribedUpdate
                   | HasSuchObject 
+                  | EndOfMib
                   deriving (Show, Typeable)
 
 instance Exception MIBException
@@ -193,14 +194,14 @@ insert (Fork x nx lx) yt@(Fork y ny ly)
                      | otherwise = throw HasSuchObject
 
 fromList :: [MIB] -> MIBTree MIB
-fromList = foldl1 insert . map singleton . makeOid
+fromList = foldl1 insert . map singleton . sort . makeOid
 
 fromListWithFirst :: MIB -> [MIB] -> MIBTree MIB
 fromListWithFirst x xs = fromListWithBase (parent x) (init $ oid x) xs
 
 fromListWithBase :: Name -> OID -> [MIB] -> MIBTree MIB
 fromListWithBase n m xs = 
-    let full = foldl1 insert . map singleton . makePartedOid [(n,m)] $ xs
+    let full = foldl1 insert . map singleton . sort . makePartedOid [(n,m)] $ xs
     in dropParted full
     where
     dropParted Empty = Empty
@@ -295,9 +296,14 @@ goLevel (Empty, _) = Nothing
 goLevel (Fork _ _ Empty, _) = Nothing
 goLevel (Fork a n l, bs) = Just (l, Level a n:bs)
 
+goBack :: Zipper a -> Maybe (Zipper a)
+goBack (_, []) = Nothing
+goBack (t, Next a l:bs) = Just (Fork a t l, bs)
+goBack (t, Level a n:bs) = Just (Fork a n t, bs)
+
 goUp :: Zipper a -> Maybe (Zipper a)
 goUp (_, []) = Nothing
-goUp (t, Next a l:bs) = Just (Fork a t l, bs)
+goUp (t, Next a l:bs) = goUp (Fork a t l, bs)
 goUp (t, Level a n:bs) = Just (Fork a n t, bs)
 
 toZipper :: MIBTree a -> Zipper a
@@ -311,7 +317,7 @@ getFocus = fromTree . fst
 
 top :: Zipper a -> Zipper a
 top (t,[]) = (t,[])  
-top z = top (fromJust $ goUp z)
+top z = top (fromJust $ goBack z)
 
 type Base = StateT (Zipper MIB) IO
 
@@ -368,7 +374,7 @@ findOne :: OID -> Base MIB
 findOne xs = do
     goClosest xs
     o <- oid . getFocus <$> get
-    t <- isObjectType . getFocus <$> get
+    t <- isObjectType
     case (o == xs, t) of
          (True, True) -> update Nothing=<< getFocus <$> get
          (True, False) -> return $ ObjectType o (last o) "" "" NoSuchObject Fixed
@@ -378,15 +384,73 @@ findMany :: [OID] -> Base [MIB]
 findMany [] = return []
 findMany (x:xs) = (:) <$> findOne x <*> findMany xs
 
-isObjectType :: MIB -> Bool
-isObjectType ObjectType{} = True
-isObjectType _            = False
+isObjectType :: Base Bool
+isObjectType = do
+    f <- getFocus <$> get
+    case f of
+         ObjectType{} -> return True
+         _ -> return False
 
 focus :: Base ()
 focus = liftIO . print =<< getFocus <$> get
 
 findNext :: SearchRange -> Base MIB
-findNext (SearchRange (_start, _end)) = undefined
+findNext s@(SearchRange (start, end, True)) = do
+    goClosest start
+    o <- getFocus <$> get
+    t <- isObjectType
+    if oid o == start && t
+       then return $ inRange s o
+       else inRange s <$> findNext (SearchRange (start, end, False))
+findNext s@(SearchRange (start, _end, False)) = do
+    goClosest start
+    l <- hasLevel
+    n <- hasNext
+    case (l, n) of
+         (True, _) -> do
+             liftIO $ print "level"
+             modify $ fromJust . goLevel
+             m <- (findClosestObject' False start)
+             return $ inRange s m
+         (False, True) -> do
+             liftIO $ print "next"
+             modify $ fromJust . goNext
+             m <- (findClosestObject' False start)
+             return $ inRange s m
+         (False, False) -> do
+             liftIO $ print "up"
+             modify $ fromJust . goUp
+             m <- (findClosestObject' True start)
+             return $ inRange s m
+
+inRange :: SearchRange -> MIB -> MIB
+inRange (SearchRange (from, to, _)) m = 
+  if from <= oid m && oid m < to 
+     then m 
+     else (ObjectType from 0 "" "" EndOfMibView Fixed)
+
+findClosestObject' :: Bool -> OID -> Base MIB
+findClosestObject' back oid' = do
+    focus
+    t <- isObjectType
+    l <- (if back then not else id) <$> hasLevel
+    n <- hasNext
+    case (t, l, n) of
+         (True, _, _) -> getFocus <$> get
+         (False, True, _) -> do
+             liftIO $ print "level"
+             modify (fromJust . goLevel)
+             findClosestObject' False oid'
+         (False, False, True) -> do
+             liftIO $ print "next"
+             modify (fromJust . goNext) 
+             findClosestObject' False oid'
+         (False, False, False) -> do 
+             liftIO $ print "up"
+             st <- get
+             case (goUp st) of
+                  Just ust -> put ust >> findClosestObject' True oid'
+                  Nothing -> return $ ObjectType oid' 0 "" "" EndOfMibView Fixed
 
 hasLevel :: StateT (Zipper MIB) IO Bool
 hasLevel = isJust . goLevel <$> get

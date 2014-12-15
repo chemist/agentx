@@ -74,7 +74,7 @@ newtype RangeSubid = RangeSubid Word8 deriving (Show, Eq)
 -}
 type SubTree = OID
 newtype UpperBound = UpperBound Word32 deriving (Show, Eq)
-newtype SearchRange = SearchRange (OID, OID) deriving (Show, Eq)
+newtype SearchRange = SearchRange (OID, OID, Include) deriving (Show, Eq)
 newtype NonRepeaters = NonRepeaters Word16 deriving (Show, Eq)
 newtype MaxRepeaters = MaxRepeaters Word16 deriving (Show, Eq)
 newtype SysUptime = SysUptime Word32 deriving (Show, Eq)
@@ -281,7 +281,7 @@ getValue _  0 = return ZeroDotZero
 getValue bo 2 = Integer . fromIntegral <$> get32 bo
 getValue bo 4 = String <$> getString bo
 getValue _  5 = return Zero
-getValue bo 6 = OI <$> getOid bo
+getValue bo 6 = OI . fst <$> getOid bo
 getValue _  64 = do
     a <- getWord8
     b <- getWord8
@@ -359,11 +359,11 @@ pduToBuilder (Get mc sr) (Flags _ _ _ ndc bi)  =
         body = toBuilder bi ndc mc  <> searchRangeList
     in (body, bodyLength body)
 pduToBuilder (GetNext mc sr) (Flags _ _ _ ndc bi)  =
-    let searchRangeList = Prelude.foldr (\(SearchRange (s,e)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
+    let searchRangeList = Prelude.foldr (\(SearchRange (s,e, _)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
         body = toBuilder bi ndc mc <> searchRangeList
     in (body, bodyLength body)
 pduToBuilder (GetBulk mc (NonRepeaters nr) (MaxRepeaters mr) sr) (Flags _ _ _ ndc bi)  =
-    let searchRangeList = Prelude.foldr (\(SearchRange (s,e)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
+    let searchRangeList = Prelude.foldr (\(SearchRange (s,e, _)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
         body = toBuilder bi ndc mc
             <> builder16 bi nr <> builder16 bi mr
             <> searchRangeList
@@ -428,21 +428,26 @@ instance Binary Packet where
 type Size = Word32
 
 
-getOid :: BigEndian -> Get OID
+getOid :: BigEndian -> Get (OID, Include)
 getOid bo = do
     nSubId <- getWord8
     prefix <- getWord8
-    _include <- getWord8
+    include <- wordToInclude <$> getWord8
     _reserved <- getWord8
     end <- sequence $ replicate (fromIntegral nSubId) (get32 bo)
     case (nSubId, prefix) of
-         (0, 0) -> return []
-         (_, 0) -> return $ map fromIntegral end
-         (_, x) -> return $ [1,3,6,1] <> map fromIntegral (fromIntegral x:end)
+         (0, 0) -> return ([], include)
+         (_, 0) -> return (map fromIntegral end, include)
+         (_, x) -> return ([1,3,6,1] <> map fromIntegral (fromIntegral x:end), include)
+
+wordToInclude :: Word8 -> Include
+wordToInclude 1 = True
+wordToInclude 0 = False
+wordToInclude _ = error "bad include"
 
 getOidList :: BigEndian -> [OID] -> Get [OID]
 getOidList bo xs = do
-    oi <- getOid bo
+    (oi, _) <- getOid bo
     isEnd <- isEmpty
     if isEnd 
        then return $ reverse (addOi oi xs)
@@ -453,9 +458,9 @@ getOidList bo xs = do
 
 getSearchRange :: BigEndian -> Get SearchRange
 getSearchRange bo = do
-    first <- getOid bo
-    second <- getOid bo
-    return $ SearchRange (first, second)
+    (first, include) <- getOid bo
+    (second, _) <- getOid bo
+    return $ SearchRange (first, second, include)
 
 getSearchRangeList :: BigEndian -> [SearchRange] -> Get [SearchRange]
 getSearchRangeList bo xs = do
@@ -484,7 +489,7 @@ getVarBind :: BigEndian -> Get VarBind
 getVarBind bo = do
     valueTag <- get16 bo 
     _reserved <- getWord16be
-    oi <- getOid bo
+    (oi, _) <- getOid bo
     v <- getValue bo valueTag 
     return $ VarBind oi v
 
@@ -504,7 +509,7 @@ parsePdu t f s
         _reserved <- getWord8
         _reserved <- getWord8
         _reserved <- getWord8
-        o <- getOid (bigEndian f)
+        (o, _) <- getOid (bigEndian f)
         d <- getDescription (bigEndian f)
         return $ Open time o d
     | t == 2 = do
@@ -521,7 +526,7 @@ parsePdu t f s
         priority <- Priority <$> getWord8
         rsid <- RangeSubid <$> getWord8
         _reserved <- getWord8
-        oid <- getOid (bigEndian f)
+        (oid, _) <- getOid (bigEndian f)
         case rsid of
              RangeSubid 0x00 -> return $ Register context timeout priority rsid oid Nothing
              _ -> Register context timeout priority rsid oid . Just <$> UpperBound <$> get32 (bigEndian f)
@@ -531,7 +536,7 @@ parsePdu t f s
         priority <- Priority <$> getWord8
         rsid <- RangeSubid <$> getWord8
         _reserved <- getWord8
-        oid <- getOid (bigEndian f)
+        (oid, _) <- getOid (bigEndian f)
         case rsid of
              RangeSubid 0x00 -> return $ Unregister context priority rsid oid Nothing
              _ -> Unregister context priority rsid oid . Just <$> UpperBound <$> get32 (bigEndian f)
@@ -583,13 +588,13 @@ parsePdu t f s
     | t == 16 = do
         -- AddAgentCaps
         context <- getContext (bigEndian f) (nonDefCont f)
-        oi <- getOid (bigEndian f)
+        (oi, _) <- getOid (bigEndian f)
         description <- getDescription (bigEndian f)
         return $ AddAgentCaps context oi description
     | t == 17 = do
         -- RemoveAgentCaps
         context <- getContext (bigEndian f) (nonDefCont f)
-        oi <- getOid (bigEndian f)
+        (oi, _) <- getOid (bigEndian f)
         return $ RemoveAgentCaps context oi
     | t == 18 = do
         -- Response
