@@ -5,8 +5,8 @@
 module Network.Protocol.Snmp.AgentX.MIBTree 
 ( MIB
 , Base
-, mkObject
 , mkModule
+, mkObject
 , mkObjectType
 , iso
 , org
@@ -17,7 +17,6 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , toList
 , fromList
 , insert
-, find
 , printTree
 , Update(..)
 , UTree(..)
@@ -28,12 +27,10 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , goLevel
 , goUp
 , attach
-, change
 , getFocus
 , focus
 , top
-, fromListWithBase
-, fromListWithFirst
+, fromListWithFirstAsBase
 , findOne
 , findMany
 , findNext
@@ -55,20 +52,16 @@ import Control.Exception (Exception, throw)
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..))
 
-data MIB = Module OID Integer Parent Name
-         | Object OID Integer Parent Name (Maybe UTree)
+data MIB =  Object OID Integer Parent Name (Maybe UTree)
          | ObjectType OID Integer Parent Name Value Update
-         | TempMib Integer
          deriving (Eq)
 
 instance Ord MIB where
     compare x y = compare (oid x) (oid y)
 
 instance Show MIB where
-    show (Module o i p n) = "Module " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n
     show (Object o i p n u) = "Object " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n <> " " <> show u
     show (ObjectType o i p n v u) = "ObjectType " <> oidToString o <> " " <> show i <> " " <> show p <> " " <> show n <> " " <> show v <> " " <> show u
-    show (TempMib x) = "TempMib " <> show x
 
 oidToString :: OID -> String
 oidToString [] = ""
@@ -90,22 +83,14 @@ instance Items MIB where
     val _ = NoSuchObject
     upd (ObjectType _ _ _ _ _ u) = u
     upd _ = Fixed
-    parent (Module _ _ x _) = x
     parent (Object _ _ x _ _) = x
     parent (ObjectType _ _ x _ _ _) = x
-    parent _ = throw BadTempMib
-    name (Module _ _ _ x) = x
     name (Object _ _ _ x _) = x
     name (ObjectType _ _ _ x _ _) = x
-    name _ = throw BadTempMib
-    int (Module _ x _ _) = x
     int (Object _ x _ _ _) = x
     int (ObjectType _ x _ _ _ _) = x
-    int (TempMib x) = x
-    oid (Module x _ _ _) = x
     oid (Object x _ _ _ _) = x
     oid (ObjectType x _ _ _ _ _) = x
-    oid _ = throw BadTempMib
 
 data Update = Fixed
             | Read (IO Value)
@@ -128,33 +113,52 @@ instance Show UTree where
 instance Eq UTree where
     _ == _ = True
                 
+data MIBTree = Node OID Integer Parent Name MIBTree MIBTree (Maybe UTree)
+             | Leaf OID Integer Parent Name MIBTree Value Update
+             | Empty
+             deriving (Show, Eq)
 
-data MIBTree a = 
-    Fork { object :: a
-         , next :: MIBTree a
-         , link :: MIBTree a
-         }          
-    | Empty
-    deriving (Show, Eq)
+singleton :: MIB -> MIBTree 
+singleton m = singleton' (oid m, m)
+  where
+    singleton' :: (OID, MIB) -> MIBTree
+    singleton' ([], _) = Empty
+    singleton' ([_], Object o i p n u) = Node o i p n Empty Empty u
+    singleton' ((x:xs), mm@(Object o _ p n u)) = Node o x  p n Empty (singleton' (xs, mm)) u
+    singleton' ([_], ObjectType o i p n v u) = Leaf o i p n Empty v u
+    singleton' ((x:xs), mm@(ObjectType o _ p n _ _)) = Node o x p n Empty (singleton' (xs, mm)) Nothing
+
+insert :: MIBTree -> MIBTree -> MIBTree
+insert a Empty = a
+insert Empty a = a
+insert (Node o i p n next link u) x@(Node _ i1 _ _ next1 link1 _)
+  | i == i1 = Node o i p n (next `insert` next1) (link `insert` link1) u
+  | otherwise = Node o i p n (next `insert` x) link u
+insert (Node o i p n next link u) x@(Leaf{}) = Node o i p n (next `insert` x) link u
+insert (Leaf o i p n next v u) x = Leaf o i p n (next `insert` x) v u 
+   
 
 -- iso(1) org(3) dod(6) internet(1) mgmt(2) mib-2(1)
 iso :: MIB
-iso = Module [1] 1 "" "iso"
+iso = Object [1] 1 "" "iso" Nothing
 
 org :: MIB
-org = Module [1,3] 3 "iso" "org"
+org = Object [1,3] 3 "iso" "org" Nothing
 
 dod :: MIB
-dod = Module [1,3,6] 6 "org" "dod"
+dod = Object [1,3,6] 6 "org" "dod" Nothing
 
 internet :: MIB 
-internet = Module [1,3,6,1] 1 "dod" "internet"
+internet = Object [1,3,6,1] 1 "dod" "internet" Nothing
 
 private :: MIB  
-private = Module [1,3,6,1,4] 4 "internet" "private"
+private = Object [1,3,6,1,4] 4 "internet" "private" Nothing
 
 enterprise :: MIB 
-enterprise = Module [1,3,6,1,4,1] 1 "private" "enterprise"
+enterprise = Object [1,3,6,1,4,1] 1 "private" "enterprise" Nothing
+
+fromList :: [MIB] -> MIBTree
+fromList = foldl1 insert . map singleton . sort . makeOid
 
 data MIBException = BadTempMib
                   | CantReadValue
@@ -165,102 +169,62 @@ data MIBException = BadTempMib
 
 instance Exception MIBException
 
-instance Functor MIBTree where
-    fmap _ Empty = Empty
-    fmap f (Fork o n l) = Fork (f o) (fmap f n) (fmap f l) 
-
-singleton :: MIB -> MIBTree MIB
-singleton m = singleton' (oid m, m) 
-    where
-    singleton' ([],_) = Empty
-    singleton' ([_], m') = Fork m' Empty Empty
-    singleton' ((x:xs), m') = Fork (TempMib x) Empty $ singleton' (xs, m')
-
-insert :: MIBTree MIB -> MIBTree MIB -> MIBTree MIB
-insert x Empty = x
-insert Empty x = x
-insert (Fork x nx lx) yt@(Fork y ny ly) 
-    | int x == int y = Fork (x `splitMIB` y) (nx `insert` ny) (lx `insert` ly)
-    | otherwise = Fork x (nx `insert` yt) lx
-    where
-        splitMIB :: MIB -> MIB -> MIB
-        splitMIB (TempMib a) (TempMib b) | a == b = TempMib a
-                                         | otherwise = throw HasSuchObject
-        splitMIB (TempMib a) b | int b == a = b
-                               | otherwise = throw HasSuchObject
-        splitMIB b (TempMib a) | int b == a = b
-                               | otherwise = throw HasSuchObject
-        splitMIB a b | a == b = a
-                     | otherwise = throw HasSuchObject
-
-fromList :: [MIB] -> MIBTree MIB
-fromList = foldl1 insert . map singleton . sort . makeOid
-
-fromListWithFirst :: MIB -> [MIB] -> MIBTree MIB
-fromListWithFirst x xs = fromListWithBase (parent x) (init $ oid x) xs
-
-fromListWithBase :: Name -> OID -> [MIB] -> MIBTree MIB
-fromListWithBase n m xs = 
-    let full = foldl1 insert . map singleton . sort . makePartedOid [(n,m)] $ xs
-    in dropParted full
-    where
-    dropParted Empty = Empty
-    dropParted x@(Fork m' _ l) = if isTempMib m'
-                                     then dropParted l
-                                     else x
-    isTempMib TempMib{} = True
-    isTempMib _ = False
-
-toList :: MIBTree MIB -> [MIB]
-toList Empty = []
-toList (Fork o n l) = o : toList n <> toList l
-
-find :: OID -> MIBTree MIB -> Maybe MIB
-find [] _ = Nothing
-find _ Empty = Nothing
-find [x] bt 
-  | int (object bt) == x = Just $ object bt
-  | int (object bt) /= x = find [x] (next bt)
-find (x:xs) bt
-  | int (object bt) == x = find xs (link bt)
-  | otherwise = find (x:xs) (next bt)
-
-printTree :: MIBTree MIB -> IO ()
-printTree f = putStr $ unlines $ drawLevel f
-  where
-    drawLevel Empty = []
-    drawLevel (Fork o n l) = (show o) : (drawSubtree n l)
-    
-    drawSubtree n l = (shift "`- " " | " (drawLevel l)) <> drawLevel n
-      where 
-      shift first rest = zipWith (++) (first : repeat rest)
-
 makeOid :: [MIB] -> [MIB]
 makeOid xs = makeOid' [] xs
   where
     makeOid' :: [(Name, OID)] -> [MIB] -> [MIB]
     makeOid' _ [] = []
-    makeOid' _ (x@(Module [1] 1 "" "iso"):ys) = x : makeOid' [("iso", [1])] ys
+    makeOid' _ (x@(Object [1] 1 "" "iso" _):ys) = x : makeOid' [("iso", [1])] ys
     makeOid' base (x:ys) =
        let Just prev = lookup (parent x) base 
            newbase = (name x, prev <> [int x]) : base
        in addOid prev x : makeOid' newbase ys
 
 addOid :: OID -> MIB -> MIB
-addOid o (Module _ i p n ) = Module (o <> [i]) i p n
 addOid o (Object _ i p n u) = Object (o <> [i]) i p n u
 addOid o (ObjectType _ i p n v u) = ObjectType (o <> [i]) i p n v u
-addOid _ _ = throw BadTempMib
 
-makePartedOid :: [(Name, OID)] -> [MIB] -> [MIB]
-makePartedOid _ [] = []
-makePartedOid base (x:xs) =
-    let Just prev = lookup (parent x) base
-        newbase = (name x, prev <> [int x]) : base
-    in addOid prev x : makePartedOid newbase xs
+makeOidWithFirstAsBase :: [MIB] -> [MIB]
+makeOidWithFirstAsBase [] = []
+makeOidWithFirstAsBase (y:ys) = makePartedOid [(parent y, init $ oid y)] (y:ys)
+    where
+        makePartedOid :: [(Name, OID)] -> [MIB] -> [MIB]
+        makePartedOid _ [] = []
+        makePartedOid base (x:xs) =
+            let Just prev = lookup (parent x) base
+                newbase = (name x, prev <> [int x]) : base
+            in addOid prev x : makePartedOid newbase xs
 
-mkModule :: Integer -> Parent -> Name -> MIB
-mkModule = Module [] 
+fromListWithFirstAsBase :: [MIB] -> MIBTree 
+fromListWithFirstAsBase ys = 
+    let full = foldl1 insert . map singleton . sort . makeOidWithFirstAsBase $ ys
+    in dropParted full
+    where
+    dropParted y@(Node o _ _ _ _ z@(Node o1 _ _ _ _ _ _) _) 
+      | o == o1 = dropParted z
+      | otherwise = y
+    dropParted y@_ = y
+
+toList :: MIBTree -> [MIB]
+toList Empty = []
+toList (Leaf o i p n next v u) = ObjectType o i p n v u  : toList next
+toList (Node o i p n next link u) = Object o i p n u : toList next <> toList link
+
+printTree :: MIBTree -> IO ()
+printTree f = putStr $ unlines $ drawLevel f
+  where
+    drawLevel Empty = []
+    drawLevel (Node o i _ n next link _) = ("Object " <> show i <> " " <> n <> " " <> show o ) : (drawSubtree next link)
+    drawLevel (Leaf o i _ n next v _) = ("ObjectType " <> show i <> " " <> n <> " " <> show v <> " " <> show o) : (drawSubtree next Empty)
+    
+    drawSubtree next link = (shift "`- " " | " (drawLevel link)) <> drawLevel next
+      where 
+      shift first rest = zipWith (++) (first : repeat rest)
+
+
+mkModule :: OID -> Parent -> Name -> MIB
+mkModule [] _ _ = error "oid cant be empty"
+mkModule o p n  = Object o (last o) p n Nothing
 
 mkObject :: Integer -> Parent -> Name -> Maybe UTree -> MIB
 mkObject = Object []
@@ -273,53 +237,57 @@ mkObjectType = ObjectType []
 -- zipper
 ---------------------------------------------------------------------------------------------------------
 
-data Move a = Next a (MIBTree a) | Level a (MIBTree a) deriving (Show)
+data Move = Next MIBTree | Level MIBTree deriving (Show)
 
-type Moving a = [Move a]
+type Moving = [Move]
 
-type Zipper a = (MIBTree a, Moving a)
+type Zipper = (MIBTree, Moving)
 
-change :: (a -> a) -> Zipper a -> Zipper a
-change _ (Empty, bs) = (Empty, bs)
-change f (Fork a n l, bs) = (Fork (f a) n l, bs)
-
-attach :: MIBTree a -> Zipper a -> Zipper a
-attach t (_, bs) = (t, bs)
-
-goNext :: Zipper a -> Maybe (Zipper a)
-goNext (Empty, _) = Nothing
-goNext (Fork _ Empty _, _) = Nothing
-goNext (Fork a n l, bs) = Just (n, Next a l:bs)
-
-goLevel :: Zipper a -> Maybe (Zipper a)
-goLevel (Empty, _) = Nothing
-goLevel (Fork _ _ Empty, _) = Nothing
-goLevel (Fork a n l, bs) = Just (l, Level a n:bs)
-
-goBack :: Zipper a -> Maybe (Zipper a)
-goBack (_, []) = Nothing
-goBack (t, Next a l:bs) = Just (Fork a t l, bs)
-goBack (t, Level a n:bs) = Just (Fork a n t, bs)
-
-goUp :: Zipper a -> Maybe (Zipper a)
-goUp (_, []) = Nothing
-goUp (t, Next a l:bs) = goUp (Fork a t l, bs)
-goUp (t, Level a n:bs) = Just (Fork a n t, bs)
-
-toZipper :: MIBTree a -> Zipper a
+toZipper :: MIBTree -> Zipper 
 toZipper t = (t, [])
 
-getFocus :: Zipper a -> a
-getFocus = fromTree . fst 
-  where
-  fromTree Empty = undefined
-  fromTree (Fork a _ _) = a
+attach :: MIBTree -> Zipper -> Zipper 
+attach t (_, bs) = (t, bs)
 
-top :: Zipper a -> Zipper a
+goNext :: Zipper -> Maybe Zipper 
+goNext (Empty, _) = Nothing
+goNext (Node _ _ _ _ Empty _ _, _) = Nothing
+goNext (Leaf _ _ _ _ Empty _ _, _) = Nothing
+goNext (Leaf o i p n next v    u, bs) = Just (next, Next (Leaf o i p n Empty v u):bs)
+goNext (Node o i p n next link u, bs) = Just (next, Next (Node o i p n Empty link u):bs)
+
+goLevel :: Zipper -> Maybe Zipper 
+goLevel (Empty, _) = Nothing
+goLevel (Leaf{}, _) = Nothing
+goLevel (Node _ _ _ _ _ Empty _, _) = Nothing
+goLevel (Node o i p n next link u, bs) = Just (link, Level (Node o i p n next Empty u):bs)
+
+goBack :: Zipper -> Maybe Zipper 
+goBack (_, []) = Nothing
+goBack (t, Next (Leaf o i p n Empty v u):bs) = Just (Leaf o i p n t v u, bs)
+goBack (t, Next (Node o i p n Empty link u):bs) = Just (Node o i p n t link u, bs)
+goBack (t, Level (Node o i p n next Empty u):bs) = Just (Node o i p n next t u, bs)
+goBack _ = Nothing
+
+goUp :: Zipper -> Maybe Zipper 
+goUp (_, []) = Nothing
+goUp (t, Next (Leaf o i p n Empty v u):bs) = goUp (Leaf o i p n t v u, bs)
+goUp (t, Next (Node o i p n Empty link u):bs) = goUp (Node o i p n t link u, bs)
+goUp (t, Level (Node o i p n next Empty u):bs) = Just (Node o i p n next t u, bs)
+goUp _ = Nothing
+
+top :: Zipper -> Zipper
 top (t,[]) = (t,[])  
 top z = top (fromJust $ goBack z)
 
-type Base = StateT (Zipper MIB) IO
+getFocus :: Zipper -> MIB
+getFocus = fromTree . fst 
+  where
+  fromTree Empty = undefined
+  fromTree (Node o i p n _ _ u) = Object o i p n u
+  fromTree (Leaf o i p n _ v u) = ObjectType o i p n v u
+
+type Base = StateT Zipper IO
 
 update :: Maybe Value -> MIB -> Base MIB
 update mv m = case upd m of
@@ -336,7 +304,7 @@ updateTree = do
     case isDynamic c of
        Just (UTree fun) -> do
            n <- liftIO fun 
-           modify $ attach $ fromListWithFirst c n
+           modify $ attach $ fromListWithFirstAsBase (c:n)
        Nothing -> return ()
     where
     isDynamic (Object _ _ _ _ x) = x
@@ -452,11 +420,10 @@ findClosestObject' back oid' = do
                   Just ust -> put ust >> findClosestObject' True oid'
                   Nothing -> return $ ObjectType oid' 0 "" "" EndOfMibView Fixed
 
-hasLevel :: StateT (Zipper MIB) IO Bool
+hasLevel :: StateT Zipper IO Bool
 hasLevel = isJust . goLevel <$> get
 
-hasNext :: StateT (Zipper MIB) IO Bool
+hasNext :: StateT Zipper IO Bool
 hasNext = isJust . goNext <$> get
-
 
 

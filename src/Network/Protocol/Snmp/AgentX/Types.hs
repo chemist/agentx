@@ -2,7 +2,6 @@ module Network.Protocol.Snmp.AgentX.Types where
 
 import Control.Monad.State
 import Network.Socket hiding (recv)
-import Control.Applicative
 
 import Network.Protocol.Snmp.AgentX.Protocol hiding (getValue)
 import Network.Protocol.Snmp.AgentX.MIBTree
@@ -12,7 +11,7 @@ import Network.Protocol.Snmp.AgentX.MIBTree
 data ST = ST
   { sysuptime :: SysUptime
   , packetCounter :: PacketID
-  , mibs :: Zipper MIB
+  , mibs :: Zipper 
   , sock :: Socket
   }
 

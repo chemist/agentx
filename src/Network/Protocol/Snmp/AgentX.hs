@@ -13,11 +13,11 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Applicative
 import Data.Monoid
 
-fixmon :: IO (MIBTree MIB)
+fixmon :: IO MIBTree 
 fixmon = do
     interfaces' <- interfaces
-    return $ fromListWithBase "enterprise" [1,3,6,1,4,1] $ 
-      [ mkModule 44729 "enterprise" "Fixmon"
+    return $ fromListWithFirstAsBase $ 
+      [ mkModule [1,3,6,1,4,1,44729] "enterprise" "Fixmon"
       , mkObject 0 "Fixmon" "about" Nothing
       , mkObjectType 0 "about" "name" (String "fixmon snmp agent") Fixed
       , mkObjectType 1 "about" "version" (Integer 1) Fixed

@@ -28,7 +28,7 @@ recvPacket s = do
     b <- recv s (getBodySizeFromHeader h)
     return $ decode (h <> b)
 
-agent :: String -> MIBTree MIB -> IO ()
+agent :: String -> MIBTree -> IO ()
 agent path tree = bracket (openSocket path)
                           close
                           (runAgent tree)
@@ -36,7 +36,7 @@ agent path tree = bracket (openSocket path)
 openSocket :: String -> IO Socket
 openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path) >> return x
 
-runAgent :: MIBTree MIB -> Socket -> IO ()
+runAgent :: MIBTree -> Socket -> IO ()
 runAgent tree socket'  = do
     s <- getSysUptime
     let st = ST s (PacketID 1) (toZipper tree) socket'
