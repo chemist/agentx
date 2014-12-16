@@ -29,6 +29,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , attach
 , getFocus
 , focus
+, getOid
 , top
 , fromListWithFirstAsBase
 , findOne
@@ -52,7 +53,7 @@ import Control.Exception (Exception, throw)
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..))
 
-data MIB =  Object OID Integer Parent Name (Maybe UTree)
+data MIB = Object OID Integer Parent Name (Maybe UTree)
          | ObjectType OID Integer Parent Name Value Update
          deriving (Eq)
 
@@ -361,6 +362,19 @@ isObjectType = do
 
 focus :: Base ()
 focus = liftIO . print =<< getFocus <$> get
+
+getOid :: Base OID
+getOid = do
+    i <- int . getFocus <$> get
+    getOid' [i]
+  where
+  getOid' :: OID -> Base OID
+  getOid' xs = do
+      s <- goUp <$> get
+      i <- int . getFocus <$> get
+      case s of
+          Just newst -> put newst >> getOid' (i:xs) 
+          Nothing -> return (i:xs)
 
 findNext :: SearchRange -> Base MIB
 findNext s@(SearchRange (start, end, True)) = do
