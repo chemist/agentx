@@ -16,7 +16,7 @@ import Data.Monoid
 fixmon :: IO MIBTree 
 fixmon = do
     interfaces' <- interfaces
-    return $ fromListWithFirstAsBase $ 
+    return $ fromList $ 
       [ mkModule [1,3,6,1,4,1,44729] "enterprise" "Fixmon"
       , mkObject 0 "Fixmon" "about" Nothing
       , mkObjectType 0 "about" "name" (String "fixmon snmp agent") Fixed
