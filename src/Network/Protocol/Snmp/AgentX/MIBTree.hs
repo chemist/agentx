@@ -332,7 +332,7 @@ goClosest xs = do
 findOne :: OID -> Base MIB
 findOne xs = do
     goClosest xs
-    o <- oid . getFocus <$> get
+    o <- getOid <$> get
     t <- isObjectType
     case (o == xs, t) of
          (True, True) -> update Nothing =<< getFocus <$> get
@@ -374,7 +374,7 @@ findNext s@(SearchRange (start, end, True)) = do
     o <- getFocus <$> get
     t <- isObjectType
     if oid o == start && t
-       then return $ inRange s o
+       then inRange s <$> update Nothing o
        else inRange s <$> findNext (SearchRange (start, end, False))
 findNext s@(SearchRange (start, _end, False)) = do
     goClosest start
@@ -383,16 +383,16 @@ findNext s@(SearchRange (start, _end, False)) = do
     case (l, n) of
          (True, _) -> do
              modify $ fromJust . goLevel
-             m <- (findClosestObject' False start)
-             return $ inRange s m
+             m <- findClosestObject' False start
+             inRange s <$> update Nothing m
          (False, True) -> do
              modify $ fromJust . goNext
-             m <- (findClosestObject' False start)
-             return $ inRange s m
+             m <- findClosestObject' False start
+             inRange s <$> update Nothing m
          (False, False) -> do
              modify $ fromJust . goUp
-             m <- (findClosestObject' True start)
-             return $ inRange s m
+             m <- findClosestObject' True start
+             inRange s <$> update Nothing m
 
 inRange :: SearchRange -> MIB -> MIB
 inRange (SearchRange (from, to, _)) m = 
