@@ -8,12 +8,6 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , mkModule
 , mkObject
 , mkObjectType
-, iso
-, org
-, dod
-, internet
-, private
-, enterprise
 , toList
 , fromList
 , printTree
@@ -44,9 +38,20 @@ import Control.Exception (Exception, throw)
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..))
 
-data MIB = Object OID Integer Parent Name (Maybe UTree)
-         | ObjectType OID Integer Parent Name Value Update
-         deriving (Eq)
+data MIB = Object 
+  { oid :: OID
+  , int :: Integer
+  , parent :: Parent 
+  , name  :: Name 
+  , _updu :: (Maybe UTree)
+  }      | ObjectType 
+  { oid :: OID
+  , int :: Integer
+  , parent :: Parent 
+  , name :: Name 
+  , val ::Value 
+  , upd :: Update
+  } deriving (Eq)
 
 instance Ord MIB where
     compare x y = compare (oid x) (oid y)
@@ -62,33 +67,10 @@ oidToString xs = init $ foldr (\a b -> show a <> "." <> b) "" xs
 type Parent = String
 type Name = String
 
-class Items a where
-    parent :: a -> Parent
-    name   :: a -> Name
-    int    :: a -> Integer
-    oid    :: a -> OID
-    val    :: a -> Value
-    upd    :: a -> Update
-
-instance Items MIB where
-    val (ObjectType _ _ _ _ v _) = v
-    val _ = NoSuchObject
-    upd (ObjectType _ _ _ _ _ u) = u
-    upd _ = Fixed
-    parent (Object _ _ x _ _) = x
-    parent (ObjectType _ _ x _ _ _) = x
-    name (Object _ _ _ x _) = x
-    name (ObjectType _ _ _ x _ _) = x
-    int (Object _ x _ _ _) = x
-    int (ObjectType _ x _ _ _ _) = x
-    oid (Object x _ _ _ _) = x
-    oid (ObjectType x _ _ _ _ _) = x
-
 data Update = Fixed
             | Read (IO Value)
             | ReadWrite (IO Value) (Value -> IO ())
             
-
 instance Eq Update where
     _ == _ = True
 
@@ -131,26 +113,6 @@ insert (Node i p n next link u) x@(Leaf{}) = Node i p n (next `insert` x) link u
 insert (Leaf i p n next v u) x = Leaf i p n (next `insert` x) v u 
 insert _ _ = error "bad insert usage"
    
-
--- iso(1) org(3) dod(6) internet(1) mgmt(2) mib-2(1)
-iso :: MIB
-iso = Object [1] 1 "" "iso" Nothing
-
-org :: MIB
-org = Object [1,3] 3 "iso" "org" Nothing
-
-dod :: MIB
-dod = Object [1,3,6] 6 "org" "dod" Nothing
-
-internet :: MIB 
-internet = Object [1,3,6,1] 1 "dod" "internet" Nothing
-
-private :: MIB  
-private = Object [1,3,6,1,4] 4 "internet" "private" Nothing
-
-enterprise :: MIB 
-enterprise = Object [1,3,6,1,4,1] 1 "private" "enterprise" Nothing
-
 fromList :: [MIB] -> MIBTree
 fromList [] = Empty
 fromList y@(x:_)
@@ -171,30 +133,32 @@ data MIBException = BadTempMib
 
 instance Exception MIBException
 
-addOid :: OID -> MIB -> MIB
-addOid o (Object _ i p n u) = Object (o <> [i]) i p n u
-addOid o (ObjectType _ i p n v u) = ObjectType (o <> [i]) i p n v u
-
 makeOid :: [MIB] -> [MIB]
 makeOid [] = []
-makeOid ((Object [] i p n u):xs) = Object [i] i p n u :  mkOid' [(n, [i])] xs
-makeOid ((Object oi i p n u):xs) = Object oi i p n u : mkOid' [(n, oi)] xs
-makeOid _ = error "makeOid problem"
-
-mkOid' :: [(Parent, OID)] -> [MIB] -> [MIB]
-mkOid' _ [] = []
-mkOid' base (y:ys) =
-    let Just prev = lookup (parent y) base
-        newbase = (name y, prev <> [int y]) : base
-    in addOid prev y : mkOid' newbase ys
-
+makeOid (ObjectType{} : _) = error "makeOid: first record cant be ObjectType"
+makeOid (Object o i p n u : xs) 
+  | o == [] = Object [i] i p n u :  mkOid' [(n, [i])] xs
+  | otherwise = Object o i p n u : mkOid' [(n, o)] xs
+  where
+    mkOid' :: [(Parent, OID)] -> [MIB] -> [MIB]
+    mkOid' _ [] = []
+    mkOid' base (y:ys) =
+        let Just prev = lookup (parent y) base
+            newbase = (name y, prev <> [int y]) : base
+        in addOid prev y : mkOid' newbase ys
+    addOid :: OID -> MIB -> MIB
+    addOid o' (Object _ i' p' n' u') = Object (o' <> [i']) i' p' n' u'
+    addOid o' (ObjectType _ i' p' n' v' u') = ObjectType (o' <> [i']) i' p' n' v' u'
+    
 toList :: MIBTree -> [MIB]
-toList (Root oi _ l) = toList' (oi, l)
-   where
-   toList' (o, Node i p n next link u) = Object (o <> [i]) i p n u : toList' (o, next) <> toList' (o <> [i], link)
-   toList' (o, Leaf i p n next v u) = ObjectType (o <> [i]) i p n v u : toList' (o, next)
-   toList' (_, _) = []
-toList _ = error "must start from Root"
+toList Empty  = []
+toList (Root oi n l) = Object oi (last oi) "" n Nothing : toList' (oi, l)
+toList x = toList' ([], x)
+
+toList' :: (OID, MIBTree) -> [MIB]
+toList' (o, Node i p n next link u) = Object (o <> [i]) i p n u : toList' (o, next) <> toList' (o <> [i], link)
+toList' (o, Leaf i p n next v u) = ObjectType (o <> [i]) i p n v u : toList' (o, next)
+toList' (_, _) = []
 
 printTree :: MIBTree -> IO ()
 printTree f = putStr $ unlines $ drawLevel f
@@ -205,9 +169,8 @@ printTree f = putStr $ unlines $ drawLevel f
     drawLevel (Leaf i _ n next v _) = ("ObjectType " <> show i <> " " <> n <> " " <> show v <> " " ) : (drawSubtree next Empty)
     
     drawSubtree next link = (shift "`- " " | " (drawLevel link)) <> drawLevel next
-      where 
-      shift first rest = zipWith (++) (first : repeat rest)
 
+    shift first rest = zipWith (++) (first : repeat rest)
 
 mkModule :: OID -> Parent -> Name -> MIB
 mkModule [] _ _ = error "oid cant be empty"
@@ -218,7 +181,6 @@ mkObject = Object []
 
 mkObjectType :: Integer -> Parent -> Name -> Value -> Update -> MIB
 mkObjectType = ObjectType []
-
 
 ---------------------------------------------------------------------------------------------------------
 -- zipper
@@ -425,5 +387,4 @@ hasLevel = isJust . goLevel <$> get
 
 hasNext :: StateT Zipper IO Bool
 hasNext = isJust . goNext <$> get
-
 
