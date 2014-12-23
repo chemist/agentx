@@ -296,7 +296,7 @@ getValue bo 70 = Counter64 <$> get64 bo
 getValue _  128 = return NoSuchObject
 getValue _  129 = return NoSuchInstance
 getValue _  130 = return EndOfMibView
-getValue _ _ = error "getValue bad tag"
+getValue _ v = return NoSuchObject --  error $ "getValue bad tag " ++ show v
 
 
 -- TODO check zerodotzero 

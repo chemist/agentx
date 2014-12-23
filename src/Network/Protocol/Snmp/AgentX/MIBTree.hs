@@ -312,8 +312,8 @@ isObjectType = do
          ObjectType{} -> return True
          _ -> return False
 
-focus :: Base ()
-focus = liftIO . print =<< getFocus <$> get
+-- focus :: Base ()
+-- focus = liftIO . print =<< getFocus <$> get
 
 getOid :: Zipper -> OID
 getOid (Root o _ _, []) = o
@@ -364,7 +364,6 @@ inRange (SearchRange (from, to, _)) m =
 
 findClosestObject' :: Bool -> OID -> Base MIB
 findClosestObject' back oid' = do
-    focus
     t <- isObjectType
     l <- (if back then not else id) <$> hasLevel
     n <- hasNext

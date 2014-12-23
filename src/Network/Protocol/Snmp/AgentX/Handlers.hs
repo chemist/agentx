@@ -18,7 +18,6 @@ mibToVarBind y = VarBind (oid y) (val y)
 
 route :: Packet -> AgentT Packet
 route p@(Packet _ pdu _ _ _ _) = do
-    liftIO $ print pdu
     pdu' <- makePdu =<< route'    
     let (Packet v _ flags sid tid pid) = p
     return $ Packet v pdu' flags sid tid pid
