@@ -2,30 +2,28 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Network.Protocol.Snmp.AgentX.Service where
 
-import Network.Socket hiding (recv, recvFrom)
-import Control.Concurrent (threadDelay)
-import Data.ByteString.Char8 (pack, ByteString)
-import Data.ByteString.Lazy (fromStrict, toStrict)
+import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
+import Network.Socket.ByteString.Lazy (recv, send)
+import Control.Concurrent (killThread)
+import Data.ByteString.Char8 (pack)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
 import Control.Applicative
 import Control.Monad.State
 import Control.Exception
--- import qualified Data.Foldable as F
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import System.IO hiding (getContents)
-import Pipes.Network.TCP hiding (connect)
+import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
+import Pipes.Concurrent (spawn, forkIO, Buffer( Unbounded ), fromInput, toOutput)
 import Pipes
 
 -- import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Protocol hiding (getValue)
 import Network.Protocol.Snmp.AgentX.MIBTree
--- import Network.Protocol.Snmp.AgentX.Handlers
+import Network.Protocol.Snmp.AgentX.Handlers
 import Network.Protocol.Snmp.AgentX.Types
 -- import Debug.Trace
 --
-import Prelude hiding (getContents)
 
 agent :: String -> MIBTree -> IO ()
 agent path tree = bracket (openSocket path)
@@ -40,53 +38,60 @@ runAgent tree socket'  = do
     hSetBuffering stdout LineBuffering
     s <- getSysUptime
     let st = ST s (PacketID 1) (toZipper tree) socket'
-    evalStateT (register ) st
+    (pipeO, pipeI) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
+    let fiber = liftIO . forkIO . run st
+    run st $ do
+        open >-> output
+        input >-> register >-> output
+        p1 <- fiber $ pipeI >-> dropResponse >-> responder >-> output
+        p2 <- fiber $ pipeI >-> dropResponse >-> responder >-> output
+        p3 <- fiber $ pipeI >-> dropResponse >-> responder >-> output
+        p4 <- fiber $ pipeI >-> dropResponse >-> responder >-> output
+        p5 <- fiber $ pipeI >-> dropResponse >-> responder >-> output
+        p6 <- fiber $ input >-> pipeO
+        _ <- liftIO $ getLine :: Effect AgentT String
+        void $ mapM (liftIO . killThread) [p1,p2,p3,p4,p5, p6]
 
-run :: s -> Effect (StateT s IO) a -> IO a
+run :: ST -> Effect AgentT a -> IO a
 run st = flip evalStateT st . runEffect
 
-register :: AgentT ()
-register = do
-    s <- get
-    let sock' = sock s
-    st <- get
-    let outputP = output sock'
-        inputP = input sock'
-    liftIO $ run st $ do
-        open >-> outputP
-        liftIO $ print "open ok"
-        inputP >-> sidFromOpen >-> registerP >-> outputP
-        inputP >-> showResp
-    liftIO $ threadDelay 100000000
+responder :: Pipe Packet Packet AgentT ()
+responder = forever $ await >>= lift . route >>= yield
 
-showResp = do
-    i <- decode . fromStrict <$> await
-    liftIO $ print (i :: Packet)
-    showResp
+dropResponse :: Pipe Packet Packet AgentT ()
+dropResponse = forever $ do
+    p <- await
+    case p of
+         Packet _ Response{} _ _ _ _ -> liftIO $ print $ "Not routable " ++ show p
+         _ -> yield p
 
-input :: Socket -> Producer ByteString (StateT ST IO)  ()
-input s = fromSocket s 4096
-
-output :: Socket -> Consumer ByteString (StateT ST IO) ()
-output s = toSocket s
-
-open :: Producer ByteString (StateT ST IO) ()
-open = do
-    s <- get
-    let tree = fst (mibs s)
-        base = head $ toList tree 
-        open' = Open (Timeout 200) (oid base) (Description $ "Haskell AgentX sub-aagent: " <> pack (name base))
-    yield $ toStrict (encode $ Packet 1 open' (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 1))
-
-sidFromOpen :: Pipe ByteString Packet (StateT ST IO) ()
-sidFromOpen = do
-    i <- decode . fromStrict <$> await
-    liftIO $ print i
+dp :: String -> Pipe Packet Packet AgentT ()
+dp label = forever $ do
+    i <- await
+    liftIO $ print $ label ++ " " ++ show i
     yield i
 
+input :: Producer Packet AgentT ()
+input = forever $ do
+    sock' <- sock <$> get
+    h <- liftIO $ recv sock' 20
+    b <- liftIO $ recv sock' (getBodySizeFromHeader h)
+    yield $ decode $ h <> b
 
-registerP :: Pipe Packet ByteString (StateT ST IO) ()
-registerP = do
+output :: Consumer Packet AgentT ()
+output = forever $ do
+    sock' <- sock <$> get
+    bs <- await
+    void . liftIO $ send sock' (encode bs)
+
+open :: Producer Packet AgentT ()
+open = do
+    base <- head . toList . fst . mibs <$> get
+    let open' = Open (Timeout 200) (oid base) (Description $ "Haskell AgentX sub-aagent: " <> pack (name base))
+    yield $ Packet 1 open' (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 1)
+
+register :: Pipe Packet Packet AgentT ()
+register = do
     s <- get
     response <- await
     liftIO $ print response
@@ -95,7 +100,7 @@ registerP = do
         tid = getTid response
         pid = getPid response
         flags = Flags False False False False False
-    each $ map (\x -> toStrict $ encode $ Packet 1 (mibToRegisterPdu x) flags sid tid pid) tree
+    each $ map (\(x, p) -> Packet 1 (mibToRegisterPdu x) flags sid tid p) $ zip tree [succ pid .. ]
     where
       getPid (Packet _ _ _ _ _ x) = x
       getTid (Packet _ _ _ _ x _) = x
@@ -103,41 +108,6 @@ registerP = do
       mibToRegisterPdu :: MIB -> PDU
       mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
 
---    liftIO $ sendAll sock' (encode $ Packet 1 open (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 1))
---    response <- liftIO $ recvPacket sock'
---    let sid = getSid response
---        tid = getTid response
---        pid = getPid response
---    F.mapM_ (registerAll sock' sid tid pid) $ toList tree
---    where
---      registerAll sock' sid tid pid values = do
---          let p = nextPID pid
---          liftIO $ sendAll sock' (encode $ Packet 1 (mibToRegisterPdu values) (Flags False False False False False) sid tid p)
---          response <- liftIO $ recvPacket sock'
---          liftIO $ print response
---      getPid (Packet _ _ _ _ _ x) = x
---      getTid (Packet _ _ _ _ x _) = x
---      getSid (Packet _ _ _ x _ _) = x
---      mibToRegisterPdu :: MIB -> PDU
---      mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
-
-{--
-loop :: AgentT ()
-loop = forever $ do
-    s <- sock <$> get
-    h <- liftIO $ recv s 20
-    b <- liftIO $ recv s (getBodySizeFromHeader h)
-    st <- get
-    liftIO . forkIO $ (flip  evalStateT) st $ do
-        response <- route (decode $ h <> b) -- need catch here
-        -- liftIO $ sendAll s (encode response)
-        undefined
-
-
-nextPID :: PacketID -> PacketID
-nextPID (PacketID x) = PacketID (succ x)
-
---}
 getSysUptime :: IO SysUptime
 getSysUptime = do
     (t :: Integer) <- flip div' 1 <$> getPOSIXTime

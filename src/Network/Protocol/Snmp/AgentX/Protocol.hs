@@ -197,6 +197,18 @@ newtype TransactionID = TransactionID Word32 deriving (Show, Eq)
 
 newtype PacketID = PacketID Word32 deriving (Show, Eq)
 
+instance Enum PacketID where
+    toEnum = PacketID . fromIntegral
+    fromEnum (PacketID x) = fromIntegral x
+
+instance Enum SessionID where
+    toEnum = SessionID . fromIntegral
+    fromEnum (SessionID x) = fromIntegral x
+
+instance Enum TransactionID where
+    toEnum = TransactionID . fromIntegral
+    fromEnum (TransactionID x) = fromIntegral x
+
 newtype PayloadLenght = PayloadLenght Word32 deriving (Show, Eq)
 
 ----------------------------------------------------------------------------------------------------------------------
