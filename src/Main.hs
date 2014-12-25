@@ -53,4 +53,3 @@ interfaces = do
 main :: IO ()
 main = agent "/var/agentx/master" =<< fixmon
 
-
