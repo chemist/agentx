@@ -1,7 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
-module Network.Protocol.Snmp.AgentX.Service where
+module Network.Protocol.Snmp.AgentX.Service 
+( agent )
+where
 
 import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
 import Network.Socket.ByteString.Lazy (recv, send)
@@ -17,7 +19,6 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
 import Pipes.Concurrent (spawn, forkIO, Buffer( Unbounded ), fromInput, toOutput)
 import Pipes
-import Pipes.Prelude (filter)
 import Data.IORef
 import Data.Maybe
 import Prelude hiding (filter)
@@ -42,22 +43,32 @@ runAgent :: MIBTree -> Socket -> IO ()
 runAgent tree socket'  = do
     hSetBuffering stdout LineBuffering
     s <- getSysUptime
-    i <- newIORef (Nothing, Nothing)
+    i <- newIORef Nothing
     p <- newIORef (PacketID 1)
     let st = ST s p (toZipper tree) socket' i
-    (pipeO, pipeI) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
+    (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
+    (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     let fiber = liftIO . forkIO . run st
     run st $ do
-        p6 <- fiber $ input >-> pipeO
-        client pipeI >-> output
-        ssid <- lift getServerSid
-        p1 <- fiber $ pipeI >-> filterBySid ssid >-> server >-> output
-        p2 <- fiber $ pipeI >-> filterBySid ssid >-> server >-> output
-        p3 <- fiber $ pipeI >-> filterBySid ssid >-> server >-> output
-        p4 <- fiber $ pipeI >-> filterBySid ssid >-> server >-> output
-        p5 <- fiber $ pipeI >-> filterBySid ssid >-> server >-> output
+        p6 <- fiber $ input >-> sortFork reqTo respTo
+        resp >-> registrator
+        p1 <- fiber $ req >-> dp "server " >->  server >-> output
+        p2 <- fiber $ req >-> dp "server " >->  server >-> output
+        p3 <- fiber $ req >-> dp "server " >->  server >-> output
+        p4 <- fiber $ req >-> dp "server " >->  server >-> output
+        p5 <- fiber $ req >-> dp "server " >->  server >-> output
+        _ <- forever $ do
+            resp >-> client ping
+            liftIO $ threadDelay 5000000
         _ <- liftIO $ getLine :: Effect AgentT String
         void $ mapM (liftIO . killThread) [p1,p2,p3,p4,p5, p6]
+
+sortFork :: Consumer Packet AgentT () -> Consumer Packet AgentT () -> Consumer Packet AgentT ()
+sortFork requests responses = forever $ do
+    m <- await
+    case m of
+         Packet _ Response{} _ _ _ _ -> yield m >-> responses
+         _ -> yield m  >->  requests
 
 run :: ST -> Effect AgentT a -> IO a
 run st = flip evalStateT st . runEffect
@@ -65,47 +76,34 @@ run st = flip evalStateT st . runEffect
 server :: Pipe Packet Packet AgentT ()
 server = forever $ await >>= lift . route >>= yield
 
-client :: Producer Packet AgentT () -> Producer Packet AgentT () 
-client fromSnmpServer = do
-    st <- get
-    let reqResp = requestResponse fromSnmpServer
+registrator :: Consumer Packet AgentT () 
+registrator = do
     openPacket <- lift open
-    -- open 2 session
-    liftIO $ run st $ reqResp openPacket
-    liftIO $ run st $ reqResp openPacket
+    -- open session
+    client openPacket
     -- register mibs
     registerPackages <- lift register
-    liftIO $ run st $ mapM_ reqResp registerPackages
-    forever $ do
-        liftIO $ run st $ reqResp ping
-        liftIO $ threadDelay 5000000
+    mapM_ client registerPackages
 
-requestResponse :: Producer Packet AgentT () -> Packet -> Effect AgentT ()
-requestResponse fromSnmpServer p = do
+client :: Packet -> Consumer Packet AgentT ()
+client p = do
     pid <- lift getPid
-    sid <- lift getClientSid
+    sid <- lift getSid
     yield (setPidSid p pid sid) >-> output
-    fromSnmpServer >-> response 
+    resp <- await
+    yield resp >-> response
     where
       setPidSid (Packet a b c _ e _) pid sid = Packet a b c sid e pid
-
-filterBySid :: SessionID -> Pipe Packet Packet AgentT ()
-filterBySid sid = filter (\x -> getSid x == sid)
-    where
-      getSid (Packet _ _ _ s _ _) = s
 
 response :: Consumer Packet AgentT ()
 response = do
     p <- await
     sessionsRef <- sessions <$> get
-    (c, s) <- liftIO $ readIORef sessionsRef
-    case (c, s) of
-         (Nothing, Nothing) -> lift $ setClientSid (getSid p)
-         (_      , Nothing) -> lift $ setServerSid (getSid p)
-         _ -> return ()
+    sid <- liftIO $ readIORef sessionsRef
+    maybe (lift . setSid . gs $ p) (const $ return ()) sid
     liftIO $ print $ "response: " <> show p
     where
-      getSid (Packet _ _ _ s _ _) = s
+      gs (Packet _ _ _ s _ _) = s
 
 register :: AgentT [Packet]
 register = do
@@ -118,14 +116,7 @@ register = do
     return $ map (\x -> Packet 1 (mibToRegisterPdu x) flags sid tid pid) $ tree
     where
       mibToRegisterPdu :: MIB -> PDU
-      mibToRegisterPdu m = Register Nothing (Timeout 200) (Priority 127) (RangeSubid 0) (oid m) Nothing
-
-dropResponse :: Pipe Packet Packet AgentT ()
-dropResponse = forever $ do
-    p <- await
-    case p of
-         Packet _ Response{} _ _ _ _ -> liftIO $ print $ "Not routable " ++ show p
-         _ -> yield p
+      mibToRegisterPdu m = Register Nothing (Timeout 0) (Priority 127) (RangeSubid 0) (oid m) Nothing
 
 dp :: String -> Pipe Packet Packet AgentT ()
 dp label = forever $ do
@@ -149,35 +140,22 @@ output = forever $ do
 open :: AgentT Packet
 open = do
     base <- head . toList . fst . mibs <$> get
-    let open' = Open (Timeout 200) (oid base) (Description $ "Haskell AgentX sub-aagent: " <> pack (name base))
+    let open' = Open (Timeout 0) (oid base) (Description $ "Haskell AgentX sub-aagent: " <> pack (name base))
     return $ Packet 1 open' (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 0)
 
 ping :: Packet
 ping = Packet 1 (Ping Nothing) (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 0)
 
-getClientSid :: AgentT SessionID
-getClientSid = do
+getSid :: AgentT SessionID
+getSid = do
     sesRef <- sessions <$> get
-    s <- fst <$> (liftIO $ readIORef sesRef)
+    s <- liftIO $ readIORef sesRef
     return $ fromMaybe (SessionID 0) s
 
-getServerSid :: AgentT SessionID
-getServerSid = do
+setSid :: SessionID -> AgentT ()
+setSid sid = do
     sesRef <- sessions <$> get
-    s <- snd <$> (liftIO $ readIORef sesRef)
-    return $ fromMaybe (SessionID 0) s
-
-setClientSid :: SessionID -> AgentT ()
-setClientSid sid = do
-    sesRef <- sessions <$> get
-    liftIO $ atomicModifyIORef' sesRef $ \(_,y) -> ((Just sid, y), ())
-    liftIO $ print $ "set sid " ++ show sid
-    liftIO $ print =<< readIORef sesRef
-
-setServerSid :: SessionID -> AgentT ()
-setServerSid sid = do
-    sesRef <- sessions <$> get
-    liftIO $ atomicModifyIORef' sesRef $ \(x,_) -> ((x,Just sid), ())
+    liftIO $ atomicModifyIORef' sesRef $ \_ -> (Just sid, ())
     liftIO $ print $ "set sid " ++ show sid
     
 

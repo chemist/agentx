@@ -14,7 +14,7 @@ data ST = ST
   , packetCounter :: IORef PacketID
   , mibs :: Zipper 
   , sock :: Socket
-  , sessions :: IORef (Maybe SessionID, Maybe SessionID)
+  , sessions :: IORef (Maybe SessionID)
   }
 
 type AgentT = StateT ST IO
