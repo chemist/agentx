@@ -5,7 +5,7 @@ module Network.Protocol.Snmp.AgentX.Service where
 
 import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
 import Network.Socket.ByteString.Lazy (recv, send)
-import Control.Concurrent (killThread)
+import Control.Concurrent (killThread, threadDelay)
 import Data.ByteString.Char8 (pack)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
@@ -76,6 +76,9 @@ client fromSnmpServer = do
     -- register mibs
     registerPackages <- lift register
     liftIO $ run st $ mapM_ reqResp registerPackages
+    forever $ do
+        liftIO $ run st $ reqResp ping
+        liftIO $ threadDelay 5000000
 
 requestResponse :: Producer Packet AgentT () -> Packet -> Effect AgentT ()
 requestResponse fromSnmpServer p = do
@@ -148,6 +151,9 @@ open = do
     base <- head . toList . fst . mibs <$> get
     let open' = Open (Timeout 200) (oid base) (Description $ "Haskell AgentX sub-aagent: " <> pack (name base))
     return $ Packet 1 open' (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 0)
+
+ping :: Packet
+ping = Packet 1 (Ping Nothing) (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 0)
 
 getClientSid :: AgentT SessionID
 getClientSid = do
