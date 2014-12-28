@@ -1,6 +1,6 @@
 module Network.Protocol.Snmp.AgentX.Types where
 
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Network.Socket hiding (recv)
 import Data.IORef
 

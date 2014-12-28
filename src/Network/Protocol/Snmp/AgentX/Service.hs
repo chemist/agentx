@@ -12,13 +12,14 @@ import Data.ByteString.Char8 (pack)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
 import Control.Applicative
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Control.Exception
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
 import Pipes.Concurrent (spawn, forkIO, Buffer( Unbounded ), fromInput, toOutput)
 import Pipes
+import Pipes.Lift
 import Data.IORef
 import Data.Maybe
 import Prelude hiding (filter)
@@ -49,80 +50,24 @@ runAgent tree socket'  = do
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     let fiber = liftIO . forkIO . run st
-    run st $ do
-        p6 <- fiber $ input >-> sortFork reqTo respTo
-        resp >-> registrator
-        p1 <- fiber $ req >-> dp "server " >->  server >-> output
-        p2 <- fiber $ req >-> dp "server " >->  server >-> output
-        p3 <- fiber $ req >-> dp "server " >->  server >-> output
-        p4 <- fiber $ req >-> dp "server " >->  server >-> output
-        p5 <- fiber $ req >-> dp "server " >->  server >-> output
-        _ <- forever $ do
-            resp >-> client ping
-            liftIO $ threadDelay 5000000
-        _ <- liftIO $ getLine :: Effect AgentT String
-        void $ mapM (liftIO . killThread) [p1,p2,p3,p4,p5, p6]
+    p6 <- fiber $ input >-> sortInput reqTo respTo
+    run st $ resp >-> registrator >-> output
+    p1 <- fiber $ req >-> server >-> output 
+    p2 <- fiber $ req >-> server >-> output 
+    p3 <- fiber $ req >-> server >-> output 
+    p4 <- fiber $ req >-> server >-> output 
+    p5 <- fiber $ req >-> server >-> output 
+    _ <- run st $ forever $ do
+        resp >-> client ping >-> output
+        liftIO $ threadDelay 5000000
+    _ <-  getLine :: IO String
+    void $ mapM (liftIO . killThread) [p1,p2,p3,p4,p5, p6]
 
-sortFork :: Consumer Packet AgentT () -> Consumer Packet AgentT () -> Consumer Packet AgentT ()
-sortFork requests responses = forever $ do
-    m <- await
-    case m of
-         Packet _ Response{} _ _ _ _ -> yield m >-> responses
-         _ -> yield m  >->  requests
-
+---------------------------------------------------------------------------
+-- Pipes eval 
+---------------------------------------------------------------------------
 run :: ST -> Effect AgentT a -> IO a
-run st = flip evalStateT st . runEffect
-
-server :: Pipe Packet Packet AgentT ()
-server = forever $ await >>= lift . route >>= yield
-
-registrator :: Consumer Packet AgentT () 
-registrator = do
-    openPacket <- lift open
-    -- open session
-    client openPacket
-    -- register mibs
-    registerPackages <- lift register
-    mapM_ client registerPackages
-
-client :: Packet -> Consumer Packet AgentT ()
-client p = do
-    pid <- lift getPid
-    sid <- lift getSid
-    yield (setPidSid p pid sid) >-> output
-    resp <- await
-    yield resp >-> response
-    where
-      setPidSid (Packet a b c _ e _) pid sid = Packet a b c sid e pid
-
-response :: Consumer Packet AgentT ()
-response = do
-    p <- await
-    sessionsRef <- sessions <$> get
-    sid <- liftIO $ readIORef sessionsRef
-    maybe (lift . setSid . gs $ p) (const $ return ()) sid
-    liftIO $ print $ "response: " <> show p
-    where
-      gs (Packet _ _ _ s _ _) = s
-
-register :: AgentT [Packet]
-register = do
-    s <- get
-    let tree = toList $ fst (mibs s)
-        flags = Flags False False False False False
-        sid = SessionID 0
-        tid = TransactionID 0
-        pid = PacketID 0
-    return $ map (\x -> Packet 1 (mibToRegisterPdu x) flags sid tid pid) $ tree
-    where
-      mibToRegisterPdu :: MIB -> PDU
-      mibToRegisterPdu m = Register Nothing (Timeout 0) (Priority 127) (RangeSubid 0) (oid m) Nothing
-
-dp :: String -> Pipe Packet Packet AgentT ()
-dp label = forever $ do
-    i <- await
-    liftIO $ print $ label ++ " " ++ show i
-    yield i
+run s eff = runEffect $ evalStateP s eff
 
 input :: Producer Packet AgentT ()
 input = forever $ do
@@ -136,6 +81,61 @@ output = forever $ do
     sock' <- sock <$> get
     bs <- await
     void . liftIO $ send sock' (encode bs)
+
+sortInput :: Consumer Packet AgentT () -> Consumer Packet AgentT () -> Consumer Packet AgentT ()
+sortInput requests responses = forever $ do
+    m <- await
+    case m of
+         Packet _ Response{} _ _ _ _ -> yield m >-> responses
+         _ -> yield m  >->  requests
+
+server :: Pipe Packet Packet AgentT ()
+server = forever $ await >>= lift . route >>= yield
+
+registrator :: Pipe Packet Packet AgentT () 
+registrator = do
+    openPacket <- lift open
+    -- open session
+    client openPacket
+    -- register mibs
+    registerPackages <- lift register
+    mapM_ client registerPackages
+
+client :: Packet -> Pipe Packet Packet AgentT ()
+client p = do
+    pid <- lift getPid
+    sid <- lift getSid
+    yield (setPidSid p pid sid) 
+    resp <- await
+    sessionsRef <- sessions <$> get
+    sid' <- liftIO $ readIORef sessionsRef
+    maybe (lift . setSid . gs $ resp) (const $ return ()) sid'
+    liftIO $ print $ "response: " <> show p
+    where
+      setPidSid (Packet a b c _ e _) pid sid = Packet a b c sid e pid
+      gs (Packet _ _ _ s _ _) = s
+
+_dp :: String -> Pipe Packet Packet AgentT ()
+_dp label = forever $ do
+    i <- await
+    liftIO $ print $ label ++ " " ++ show i
+    yield i
+
+---------------------------------------------------------------------------
+-- AgentT eval 
+---------------------------------------------------------------------------
+register :: AgentT [Packet]
+register = do
+    s <- get
+    let tree = toList $ fst (mibs s)
+        flags = Flags False False False False False
+        sid = SessionID 0
+        tid = TransactionID 0
+        pid = PacketID 0
+    return $ map (\x -> Packet 1 (mibToRegisterPdu x) flags sid tid pid) $ tree
+    where
+      mibToRegisterPdu :: MIB -> PDU
+      mibToRegisterPdu m = Register Nothing (Timeout 0) (Priority 127) (RangeSubid 0) (oid m) Nothing
 
 open :: AgentT Packet
 open = do

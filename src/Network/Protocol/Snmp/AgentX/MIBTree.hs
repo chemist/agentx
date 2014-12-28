@@ -30,7 +30,7 @@ import Data.Typeable (Typeable)
 import Data.Monoid ((<>))
 import Data.Maybe (fromJust, isJust, fromMaybe)
 import Data.List (stripPrefix, sort)
-import Control.Monad.State (StateT, get, put, liftIO, modify)
+import Control.Monad.State.Strict (StateT, get, put, liftIO, modify)
 import Control.Monad
 import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw)
