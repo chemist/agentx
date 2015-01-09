@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE BangPatterns #-}
 module Network.Protocol.Snmp.AgentX.Protocol where
 
@@ -78,7 +79,7 @@ newtype SearchRange = SearchRange (OID, OID, Include) deriving (Show, Eq)
 newtype NonRepeaters = NonRepeaters Word16 deriving (Show, Eq)
 newtype MaxRepeaters = MaxRepeaters Word16 deriving (Show, Eq)
 newtype SysUptime = SysUptime Word32 deriving (Show, Eq)
-newtype Index = Index Word16 deriving (Show, Eq)
+newtype Index = Index Word16 deriving (Show, Eq, Enum)
 
 data RError = NoAgentXError
             | OpenFailed
@@ -94,6 +95,22 @@ data RError = NoAgentXError
             | RParseError
             | RequestDenied
             | ProcessingError
+            -- 7.2.4.1
+            | GenError
+            | NoAccess
+            | WrongType
+            | WrongLength
+            | WrongEncoding
+            | WrongValue
+            | NoCreation
+            | InconsistentValue
+            | ResourceUnavailable
+            | NotWritable
+            | InconsistentName
+            -- 7.2.4.2
+            | CommitFailed
+            -- 7.2.4.3
+            | UndoFailed
             deriving (Show, Eq)
 
 rerrorToTag :: RError -> Word16
@@ -111,6 +128,20 @@ rerrorToTag UnknownAgentCaps      = 265
 rerrorToTag RParseError           = 266
 rerrorToTag RequestDenied         = 267
 rerrorToTag ProcessingError       = 268
+rerrorToTag GenError              = 5
+rerrorToTag NoAccess              = 6
+rerrorToTag WrongType             = 7
+rerrorToTag WrongLength           = 8
+rerrorToTag WrongEncoding         = 9
+rerrorToTag WrongValue            = 10
+rerrorToTag NoCreation            = 11
+rerrorToTag InconsistentValue     = 12
+rerrorToTag ResourceUnavailable   = 13
+rerrorToTag NotWritable           = 17
+rerrorToTag InconsistentName      = 18
+rerrorToTag CommitFailed          = 14
+rerrorToTag UndoFailed            = 15
+
 
 rerrorFromTag :: Word16 -> RError
 rerrorFromTag 0   = NoAgentXError        
@@ -127,6 +158,19 @@ rerrorFromTag 265 = UnknownAgentCaps
 rerrorFromTag 266 = RParseError          
 rerrorFromTag 267 = RequestDenied        
 rerrorFromTag 268 = ProcessingError      
+rerrorFromTag 5   = GenError            
+rerrorFromTag 6   = NoAccess            
+rerrorFromTag 7   = WrongType           
+rerrorFromTag 8   = WrongLength         
+rerrorFromTag 9   = WrongEncoding       
+rerrorFromTag 10  = WrongValue          
+rerrorFromTag 11  = NoCreation          
+rerrorFromTag 12  = InconsistentValue   
+rerrorFromTag 13  = ResourceUnavailable 
+rerrorFromTag 17  = NotWritable         
+rerrorFromTag 18  = InconsistentName    
+rerrorFromTag 14  = CommitFailed    
+rerrorFromTag 15  = UndoFailed    
 rerrorFromTag _   = error "bad rerror"        
 
 data PDU = Open Timeout OID Description -- 6.2.1

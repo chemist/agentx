@@ -110,7 +110,7 @@ client p = do
     sessionsRef <- sessions <$> get
     sid' <- liftIO $ readIORef sessionsRef
     maybe (lift . setSid . gs $ resp) (const $ return ()) sid'
-    liftIO $ print $ "response: " <> show p
+    -- liftIO $ print $ "response: " <> show p
     where
       setPidSid (Packet a b c _ e _) pid sid = Packet a b c sid e pid
       gs (Packet _ _ _ s _ _) = s

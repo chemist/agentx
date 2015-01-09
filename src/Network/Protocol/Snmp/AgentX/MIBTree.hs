@@ -299,7 +299,7 @@ findOne xs = do
     case (o == xs, t) of
          (True, True) -> update Nothing =<< getFocus <$> get
          (True, False) -> return $ ObjectType o (last o) "" "" NoSuchObject Fixed
-         _ -> return $ ObjectType o (last o) "" "" NoSuchInstance Fixed
+         _ -> return $ ObjectType xs (last xs) "" "" NoSuchInstance Fixed
 
 findMany :: [OID] -> Base [MIB]
 findMany [] = return []

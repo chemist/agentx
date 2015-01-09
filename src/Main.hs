@@ -12,16 +12,22 @@ import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Applicative
 import Data.Monoid
+import Data.IORef
 
 fixmon :: IO MIBTree 
 fixmon = do
     interfaces' <- interfaces
+    agentName <- newIORef $ String "fixmon snmp agent"
     return $ fromList $ 
       [ mkModule [1,3,6,1,4,1,44729] "enterprise" "Fixmon"
       , mkObject 0 "Fixmon" "about" Nothing
-      , mkObjectType 0 "about" "name" (String "fixmon snmp agent") Fixed
+      , mkObjectType 0 "about" "name" (String "fixmon snmp agent") (updateName agentName) 
       , mkObjectType 1 "about" "version" (Integer 1) Fixed
       ] <> interfaces' <> time
+
+updateName :: IORef Value -> Update
+updateName agentName = ReadWrite (readIORef agentName) (\new -> writeIORef agentName new)
+
 
 time :: [MIB]
 time = 
