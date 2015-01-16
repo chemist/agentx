@@ -5,6 +5,7 @@ module Main where
 import Network.Protocol.Snmp (Value(..))
 import Network.Protocol.Snmp.AgentX.Service (agent)
 import Network.Protocol.Snmp.AgentX.MIBTree
+import Network.Protocol.Snmp.AgentX.Protocol (RError(..))
 import Network.Info
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
@@ -26,7 +27,11 @@ fixmon = do
       ] <> interfaces' <> time
 
 updateName :: IORef Value -> Update
-updateName agentName = ReadWrite (readIORef agentName) (\new -> writeIORef agentName new)
+updateName agentName = ReadWrite (readIORef agentName) 
+                                 (\new -> (writeIORef agentName new >> return NoAgentXError))
+                                 (return NoAgentXError)
+                                 (return NoAgentXError)
+                                 (return NoAgentXError)
 
 
 time :: [MIB]

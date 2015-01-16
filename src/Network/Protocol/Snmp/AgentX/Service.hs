@@ -7,7 +7,7 @@ where
 
 import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
 import Network.Socket.ByteString.Lazy (recv, send)
-import Control.Concurrent (killThread, threadDelay)
+import Control.Concurrent (killThread, threadDelay, ThreadId)
 import Data.ByteString.Char8 (pack)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
@@ -49,25 +49,28 @@ runAgent tree socket'  = do
     let st = ST s p (toZipper tree) socket' i
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
-    let fiber = liftIO . forkIO . run st
-    p6 <- fiber $ input >-> sortInput reqTo respTo
+    sortPid <- fiber st $ input >-> sortInput reqTo respTo
     run st $ resp >-> registrator >-> output
-    p1 <- fiber $ req >-> server >-> output 
-    p2 <- fiber $ req >-> server >-> output 
-    p3 <- fiber $ req >-> server >-> output 
-    p4 <- fiber $ req >-> server >-> output 
-    p5 <- fiber $ req >-> server >-> output 
-    _ <- run st $ forever $ do
+    serverPid <-  fiber st $ req >-> server
+    agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
     _ <-  getLine :: IO String
-    void $ mapM (liftIO . killThread) [p1,p2,p3,p4,p5, p6]
+    void $ mapM (liftIO . killThread) [serverPid, agentPid, sortPid] -- p2,p3,p4,p5, 
 
 ---------------------------------------------------------------------------
 -- Pipes eval 
 ---------------------------------------------------------------------------
 run :: ST -> Effect AgentT a -> IO a
 run s eff = runEffect $ evalStateP s eff
+
+server :: Consumer Packet AgentT ()
+server = forever $ do
+    m <- await
+    get >>= flip fiber (yield m >-> server' >-> output)
+
+fiber :: MonadIO m => ST -> Effect AgentT () -> m ThreadId
+fiber st = liftIO . forkIO . run st
 
 input :: Producer Packet AgentT ()
 input = forever $ do
@@ -83,14 +86,16 @@ output = forever $ do
     void . liftIO $ send sock' (encode bs)
 
 sortInput :: Consumer Packet AgentT () -> Consumer Packet AgentT () -> Consumer Packet AgentT ()
-sortInput requests responses = forever $ do
-    m <- await
-    case m of
-         Packet _ Response{} _ _ _ _ -> yield m >-> responses
-         _ -> yield m  >->  requests
+sortInput requests responses = forever $ await >>= sortInput'
+    where
+        sortInput' m@(Packet _ Response{} _ _ _ _) = yield m >-> responses
+        sortInput' m@_ = yield m >-> requests
 
-server :: Pipe Packet Packet AgentT ()
-server = forever $ await >>= lift . route >>= yield
+server' :: Pipe Packet Packet AgentT ()
+server' = forever $ await >>= lift . route >>= yieldOnlyJust 
+    where
+        yieldOnlyJust Nothing = return ()
+        yieldOnlyJust (Just resp) = yield resp
 
 registrator :: Pipe Packet Packet AgentT () 
 registrator = do

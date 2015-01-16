@@ -23,6 +23,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , oid
 , val
 , name
+, upd
 )
 where
 
@@ -36,7 +37,7 @@ import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw)
 
 import Network.Protocol.Snmp (Value(..), OID)
-import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..))
+import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..), RError)
 
 data MIB = Object 
   { oid :: OID
@@ -68,8 +69,15 @@ type Parent = String
 type Name = String
 
 data Update = Fixed
-            | Read (IO Value)
-            | ReadWrite (IO Value) (Value -> IO ())
+            | Read 
+              { readIO :: IO Value }
+            | ReadWrite 
+              { readAIO   :: IO Value
+              , testAIO   :: Value -> IO RError
+              , commitAIO :: IO RError
+              , undoAIO   :: IO RError
+              , cleanAIO  :: IO RError
+              }
             
 instance Eq Update where
     _ == _ = True
@@ -77,7 +85,7 @@ instance Eq Update where
 instance Show Update where
     show Fixed = "fixed"
     show (Read _) = "read-only"
-    show (ReadWrite _ _) = "read-write"
+    show (ReadWrite _ _ _ _ _) = "read-write"
 
 newtype UTree = UTree (IO [MIB])
 
@@ -243,14 +251,11 @@ getFocus z = fromTree (fst z) (getOid z)
 
 type Base = StateT Zipper IO
 
-update :: Maybe Value -> MIB -> Base MIB
-update mv m = case upd m of
+update :: MIB -> Base MIB
+update m = case upd m of
                 Fixed -> return m
                 Read fun -> setValue m <$> liftIO fun 
-                ReadWrite reread write -> do
-                    let newMib = maybe m (setValue m) mv
-                    liftIO $ write (val newMib)
-                    setValue newMib <$> liftIO reread
+                rw@ReadWrite{} -> setValue m <$> liftIO (readAIO rw)
 
 updateTree :: Base ()
 updateTree = do
@@ -297,7 +302,7 @@ findOne xs = do
     o <- getOid <$> get
     t <- isObjectType
     case (o == xs, t) of
-         (True, True) -> update Nothing =<< getFocus <$> get
+         (True, True) -> update =<< getFocus <$> get
          (True, False) -> return $ ObjectType o (last o) "" "" NoSuchObject Fixed
          _ -> return $ ObjectType xs (last xs) "" "" NoSuchInstance Fixed
 
@@ -336,7 +341,7 @@ findNext s@(SearchRange (start, end, True)) = do
     o <- getFocus <$> get
     t <- isObjectType
     if oid o == start && t
-       then inRange s <$> update Nothing o
+       then inRange s <$> update o
        else inRange s <$> findNext (SearchRange (start, end, False))
 findNext s@(SearchRange (start, _end, False)) = do
     goClosest start
@@ -346,15 +351,15 @@ findNext s@(SearchRange (start, _end, False)) = do
          (True, _) -> do
              modify $ fromJust . goLevel
              m <- findClosestObject' False start
-             inRange s <$> update Nothing m
+             inRange s <$> update m
          (False, True) -> do
              modify $ fromJust . goNext
              m <- findClosestObject' False start
-             inRange s <$> update Nothing m
+             inRange s <$> update m
          (False, False) -> do
              modify $ fromJust . goUp
              m <- findClosestObject' True start
-             inRange s <$> update Nothing m
+             inRange s <$> update m
 
 inRange :: SearchRange -> MIB -> MIB
 inRange (SearchRange (from, to, _)) m = 

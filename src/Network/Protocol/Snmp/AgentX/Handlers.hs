@@ -9,13 +9,13 @@ import Network.Protocol.Snmp.AgentX.Protocol hiding (getValue)
 import Network.Protocol.Snmp.AgentX.Types
 import Network.Protocol.Snmp (Value(..))
 
-makePdu :: [Either RError MIB] -> AgentT PDU
+makePdu :: [Either RError MIB] -> AgentT (Maybe PDU)
 makePdu xs = do
   now <- sysuptime <$> get
   let (good, index, firstBad) = splitByError xs 
   case firstBad of
-       Nothing -> return $ Response now NoAgentXError index $ map mibToVarBind good
-       Just err -> return $ Response now err index $ map mibToVarBind good
+       Nothing -> return . Just $ Response now NoAgentXError index $ map mibToVarBind good
+       Just err -> return . Just $ Response now err index $ map mibToVarBind good
 
 splitByError :: [Either RError MIB] -> ([MIB], Index, Maybe RError)
 splitByError xs = 
@@ -33,18 +33,19 @@ splitByError xs =
 mibToVarBind :: MIB -> VarBind
 mibToVarBind y = VarBind (oid y) (val y)
 
-route :: Packet -> AgentT Packet
-route p@(Packet _ pdu _ _ _ _) = do
-    pdu' <- route' pdu   
-    let (Packet v _ flags sid tid pid) = p
-    liftIO $ print $ Packet v pdu' flags sid tid pid
-    return $ Packet v pdu' flags sid tid pid
+route :: Packet -> AgentT (Maybe Packet)
+route (Packet v pdu flags sid tid pid) = route' pdu >>= return . fmap  replacePdu 
+    where
+    replacePdu :: PDU -> Packet
+    replacePdu x = Packet v x flags sid tid pid
 
-route' :: PDU -> AgentT PDU
+route' :: PDU -> AgentT (Maybe PDU)
 route' (Get _ oids) = makePdu =<< getHandler oids
 route' (GetNext _ srange) = makePdu =<< getNextHandler srange
 route' (GetBulk _ nonRepeaters maxRepeaters srange) = makePdu =<< getBulkHandler nonRepeaters maxRepeaters srange
 route' (TestSet _ vbs) = makePdu =<< setHandler vbs
+route' CleanupSet = return Nothing
+route' CommitSet  = return Nothing
 route' _p = do
     liftIO $ print _p
     makePdu =<< return [Left RequestDenied]
@@ -64,12 +65,12 @@ setHandler [] = return []
 setHandler (x:xs) = (:) <$> setOne x <*> setHandler xs
 
 setOne :: VarBind -> AgentT (Either RError MIB)
-setOne (VarBind oid' value') = do
-    liftIO $ print oid' 
-    liftIO $ print value' 
+setOne (VarBind oid' _value') = do
     m <- bridgeToBase (findOne oid')
     liftIO $ print m
-    case val m of
-         NoSuchInstance -> return $ Left NotWritable
-         NoSuchObject -> return $ Left NotWritable
+    case (val m, upd m) of
+         (NoSuchInstance, _) -> return $ Left NotWritable
+         (NoSuchObject, _) -> return $ Left NotWritable
+         (_, Fixed) -> return $ Left NotWritable
+         (_, Read _) -> return $ Left NotWritable
          _ -> return $ Right m
