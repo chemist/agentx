@@ -1,30 +1,44 @@
 module Network.Protocol.Snmp.AgentX.Types where
 
 import Control.Monad.State.Strict
+import Control.Monad.Reader
 import Network.Socket hiding (recv)
-import Data.IORef
+import Control.Concurrent.MVar
+import Control.Applicative
+import Data.Tuple (swap)
+import Data.Map
 
 import Network.Protocol.Snmp.AgentX.Protocol hiding (getValue)
 import Network.Protocol.Snmp.AgentX.MIBTree
+import Network.Protocol.Snmp
 
 
-
-data ST = ST
-  { sysuptime :: SysUptime
-  , packetCounter :: IORef PacketID
-  , mibs :: Zipper 
-  , sock :: Socket
-  , sessions :: IORef (Maybe SessionID)
+data Transaction = Transaction
+  { oldV :: Value
+  , newV :: Value
+  , statusV :: TransactionState
   }
 
-type AgentT = StateT ST IO
+data TransactionState = TestSetT
+                      | CommitSetT
+                      | UndoSetT
+                      | CleanupSetT
+                      deriving (Show, Eq, Ord, Enum)
+
+data ST = ST
+  { sysuptime :: MVar SysUptime
+  , packetCounter :: MVar PacketID
+  , mibs :: MVar Zipper 
+  , sock :: Socket
+  , sessions :: MVar SessionID
+  , transactions :: MVar (Map TransactionID Transaction)
+  }
+
+type AgentT = ReaderT ST IO
 
 
 bridgeToBase :: Base a -> AgentT a
 bridgeToBase f = do
-    st <- get
-    (result, new) <- liftIO $ runStateT f (mibs st)
-    put (st { mibs = new })
-    return result
-
+    st <- mibs <$> ask
+    liftIO $ modifyMVar st $ \x -> swap <$> runStateT f x
 

@@ -54,6 +54,7 @@ library
                      , mtl
                      , transformers
                      , time
+                     , containers
                      , network-info
                      , safe
                      , pipes-network

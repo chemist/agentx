@@ -2,6 +2,8 @@ module Network.Protocol.Snmp.AgentX.Handlers where
 
 import Control.Applicative
 import Control.Monad.State
+import Control.Monad.Reader
+import Control.Concurrent.MVar
 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp (OID)
@@ -11,7 +13,8 @@ import Network.Protocol.Snmp (Value(..))
 
 makePdu :: [Either RError MIB] -> AgentT (Maybe PDU)
 makePdu xs = do
-  now <- sysuptime <$> get
+  nowref <- sysuptime <$> ask
+  now <- liftIO . readMVar $ nowref
   let (good, index, firstBad) = splitByError xs 
   case firstBad of
        Nothing -> return . Just $ Response now NoAgentXError index $ map mibToVarBind good
@@ -34,20 +37,23 @@ mibToVarBind :: MIB -> VarBind
 mibToVarBind y = VarBind (oid y) (val y)
 
 route :: Packet -> AgentT (Maybe Packet)
-route (Packet v pdu flags sid tid pid) = route' pdu >>= return . fmap  replacePdu 
-    where
-    replacePdu :: PDU -> Packet
-    replacePdu x = Packet v x flags sid tid pid
+route p = route' p (getPdu p) >>= return . fmap (setPdu p)
 
-route' :: PDU -> AgentT (Maybe PDU)
-route' (Get _ oids) = makePdu =<< getHandler oids
-route' (GetNext _ srange) = makePdu =<< getNextHandler srange
-route' (GetBulk _ nonRepeaters maxRepeaters srange) = makePdu =<< getBulkHandler nonRepeaters maxRepeaters srange
-route' (TestSet _ vbs) = makePdu =<< setHandler vbs
-route' CleanupSet = return Nothing
-route' CommitSet  = return Nothing
-route' _p = do
-    liftIO $ print _p
+getPdu :: Packet -> PDU
+getPdu (Packet _ pdu _ _ _ _) = pdu
+
+setPdu :: Packet -> PDU -> Packet
+setPdu (Packet v _ flags sid tid pid) pdu = Packet v pdu flags sid tid pid
+
+route' :: Packet -> PDU -> AgentT (Maybe PDU)
+route' _ (Get _ oids) = makePdu =<< getHandler oids
+route' _ (GetNext _ srange) = makePdu =<< getNextHandler srange
+route' _ (GetBulk _ nonRepeaters maxRepeaters srange) = makePdu =<< getBulkHandler nonRepeaters maxRepeaters srange
+route' p (TestSet _ vbs) = makePdu =<< setHandler vbs
+route' p CleanupSet = return Nothing
+route' p CommitSet  = return Nothing
+route' p _ = do
+    liftIO $ print p
     makePdu =<< return [Left RequestDenied]
 
 getHandler :: [OID] -> AgentT [Either RError MIB]

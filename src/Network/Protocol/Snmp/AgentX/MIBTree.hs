@@ -37,7 +37,7 @@ import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw)
 
 import Network.Protocol.Snmp (Value(..), OID)
-import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..), RError)
+import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..))
 
 data MIB = Object 
   { oid :: OID
@@ -73,10 +73,7 @@ data Update = Fixed
               { readIO :: IO Value }
             | ReadWrite 
               { readAIO   :: IO Value
-              , testAIO   :: Value -> IO RError
-              , commitAIO :: IO RError
-              , undoAIO   :: IO RError
-              , cleanAIO  :: IO RError
+              , saveAIO   :: Value -> IO () 
               }
             
 instance Eq Update where
@@ -85,7 +82,7 @@ instance Eq Update where
 instance Show Update where
     show Fixed = "fixed"
     show (Read _) = "read-only"
-    show (ReadWrite _ _ _ _ _) = "read-write"
+    show (ReadWrite _ _) = "read-write"
 
 newtype UTree = UTree (IO [MIB])
 

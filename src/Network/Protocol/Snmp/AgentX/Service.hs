@@ -11,8 +11,9 @@ import Control.Concurrent (killThread, threadDelay, ThreadId)
 import Data.ByteString.Char8 (pack)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
-import Control.Applicative
+import Control.Applicative hiding (empty)
 import Control.Monad.State.Strict
+import Control.Monad.Reader
 import Control.Exception
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -20,8 +21,9 @@ import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
 import Pipes.Concurrent (spawn, forkIO, Buffer( Unbounded ), fromInput, toOutput)
 import Pipes
 import Pipes.Lift
-import Data.IORef
+import Control.Concurrent.MVar
 import Data.Maybe
+import Data.Map (empty)
 import Prelude hiding (filter)
 
 -- import Network.Protocol.Snmp (OID)
@@ -43,10 +45,12 @@ openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path
 runAgent :: MIBTree -> Socket -> IO ()
 runAgent tree socket'  = do
     hSetBuffering stdout LineBuffering
-    s <- getSysUptime
-    i <- newIORef Nothing
-    p <- newIORef (PacketID 1)
-    let st = ST s p (toZipper tree) socket' i
+    s <- newMVar =<< getSysUptime
+    i <- newEmptyMVar
+    p <- newMVar (PacketID 1)
+    m <- newMVar (toZipper tree)
+    ts <- newMVar empty
+    let st = ST s p m socket' i ts
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
@@ -62,26 +66,26 @@ runAgent tree socket'  = do
 -- Pipes eval 
 ---------------------------------------------------------------------------
 run :: ST -> Effect AgentT a -> IO a
-run s eff = runEffect $ evalStateP s eff
+run s eff = runEffect $ runReaderP s eff
 
 server :: Consumer Packet AgentT ()
 server = forever $ do
     m <- await
-    get >>= flip fiber (yield m >-> server' >-> output)
+    ask >>= flip fiber (yield m >-> server' >-> output)
 
 fiber :: MonadIO m => ST -> Effect AgentT () -> m ThreadId
 fiber st = liftIO . forkIO . run st
 
 input :: Producer Packet AgentT ()
 input = forever $ do
-    sock' <- sock <$> get
+    sock' <- sock <$> ask
     h <- liftIO $ recv sock' 20
     b <- liftIO $ recv sock' (getBodySizeFromHeader h)
     yield $ decode $ h <> b
 
 output :: Consumer Packet AgentT ()
 output = forever $ do
-    sock' <- sock <$> get
+    sock' <- sock <$> ask
     bs <- await
     void . liftIO $ send sock' (encode bs)
 
@@ -112,8 +116,8 @@ client p = do
     sid <- lift getSid
     yield (setPidSid p pid sid) 
     resp <- await
-    sessionsRef <- sessions <$> get
-    sid' <- liftIO $ readIORef sessionsRef
+    sessionsRef <- sessions <$> ask
+    sid' <- liftIO $ tryReadMVar sessionsRef
     maybe (lift . setSid . gs $ resp) (const $ return ()) sid'
     -- liftIO $ print $ "response: " <> show p
     where
@@ -131,8 +135,9 @@ _dp label = forever $ do
 ---------------------------------------------------------------------------
 register :: AgentT [Packet]
 register = do
-    s <- get
-    let tree = toList $ fst (mibs s)
+    s <- mibs <$> ask
+    zipper' <- liftIO $ readMVar s
+    let tree = toList $ fst zipper'
         flags = Flags False False False False False
         sid = SessionID 0
         tid = TransactionID 0
@@ -144,7 +149,8 @@ register = do
 
 open :: AgentT Packet
 open = do
-    base <- head . toList . fst . mibs <$> get
+    m <- mibs <$> ask
+    base <- head . toList . fst <$> (liftIO $ readMVar m)
     let open' = Open (Timeout 0) (oid base) (Description $ "Haskell AgentX sub-aagent: " <> pack (name base))
     return $ Packet 1 open' (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 0)
 
@@ -153,21 +159,21 @@ ping = Packet 1 (Ping Nothing) (Flags False False False False False) (SessionID 
 
 getSid :: AgentT SessionID
 getSid = do
-    sesRef <- sessions <$> get
-    s <- liftIO $ readIORef sesRef
+    sesRef <- sessions <$> ask
+    s <- liftIO $ tryReadMVar sesRef
     return $ fromMaybe (SessionID 0) s
 
 setSid :: SessionID -> AgentT ()
 setSid sid = do
-    sesRef <- sessions <$> get
-    liftIO $ atomicModifyIORef' sesRef $ \_ -> (Just sid, ())
+    sesRef <- sessions <$> ask
+    liftIO $ putMVar sesRef sid
     liftIO $ print $ "set sid " ++ show sid
     
 
 getPid :: AgentT PacketID
 getPid = do
-    pidRef <- packetCounter <$> get
-    liftIO $ atomicModifyIORef' pidRef $ \x -> (succ x, succ x)
+    pidRef <- packetCounter <$> ask
+    liftIO $ modifyMVar pidRef $ \x -> return (succ x, succ x)
 
 getSysUptime :: IO SysUptime
 getSysUptime = do
