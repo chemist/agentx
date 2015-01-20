@@ -237,7 +237,7 @@ type NonDefaultContext = Bool
 
 newtype SessionID = SessionID Word32 deriving (Show, Eq)
 
-newtype TransactionID = TransactionID Word32 deriving (Show, Eq)
+newtype TransactionID = TransactionID Word32 deriving (Show, Eq, Ord)
 
 newtype PacketID = PacketID Word32 deriving (Show, Eq)
 

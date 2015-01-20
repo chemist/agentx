@@ -14,10 +14,10 @@ import Network.Protocol.Snmp
 
 
 data Transaction = Transaction
-  { oldV :: Value
-  , newV :: Value
+  { updates :: [Update]
+  , vblist :: [Value]
   , statusV :: TransactionState
-  }
+  } deriving Show
 
 data TransactionState = TestSetT
                       | CommitSetT
