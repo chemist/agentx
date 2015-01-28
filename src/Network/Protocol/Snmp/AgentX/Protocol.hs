@@ -9,6 +9,7 @@ import Data.Binary
 import Data.Binary.Put (putBuilder)
 import Data.Binary.Get 
 import Data.Binary.Builder
+import Data.String
 import Network.Protocol.Snmp (Value(..), OID)
 import qualified Network.Protocol.Snmp as Snmp
 import Data.ByteString (ByteString)
@@ -50,7 +51,11 @@ reasonFromTag 5 = Shutdown
 reasonFromTag 6 = ByManager    
 reasonFromTag _ = error "unknown reasonFromTag"
 
-newtype Context = Context ByteString deriving (Show, Eq)
+newtype Context = Context ByteString deriving (Show, Ord, Eq)
+
+instance IsString Context where
+    fromString = Context . fromString 
+    
 
 newtype Priority = Priority Word8 deriving (Show, Eq)
 {-

@@ -14,7 +14,8 @@ import Network.Protocol.Snmp
 
 
 data Transaction = Transaction
-  { updates :: [Update]
+  { tcontext :: Maybe Context
+  , updates :: [Update]
   , vblist :: [Value]
   , statusV :: TransactionState
   } deriving Show
