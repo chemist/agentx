@@ -26,11 +26,10 @@ fixmon = do
       , mkObjectType 0 "about" "name" (defaultContext (String "fixmon snmp agent")) (updateName agentName) 
       , mkObjectType 1 "about" "version" (defaultContext (Integer 1)) Fixed
       , mkObjectType 2 "about" "contexted" contextedValue Fixed
---      , mkObjectType 2 "about" "contexted" (MapContext (Map.fromList [("one", Integer 1), ("two", Integer 2)])) Fixed
       ] <> interfaces' <> time
 
 contextedValue :: ContextedValue
-contextedValue = Map.fromList [ ("111", String "context1")
+contextedValue = Map.fromList [ ("context1", String "context1")
                               , ("context2", String "context2")
                               , ("", String "defalut")
                               ]

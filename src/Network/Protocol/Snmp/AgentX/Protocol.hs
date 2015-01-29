@@ -2,7 +2,35 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE BangPatterns #-}
-module Network.Protocol.Snmp.AgentX.Protocol where
+module Network.Protocol.Snmp.AgentX.Protocol 
+( -- funs
+  bodySizeFromHeader
+, defFlags
+, mkPacket
+, getAX
+, setAX
+-- errors
+, RError(..)
+-- words 
+, TransactionID
+, SessionID
+, PacketID
+, SysUptime
+, MaxRepeaters
+, NonRepeaters
+, Index
+, Timeout
+, Priority
+, RangeSubid
+-- bytestring
+, Description
+, Context
+-- complex type
+, SearchRange(..)
+, VarBind(..)
+, Packet
+, PDU(..)
+) where
 
 import Data.Word
 import Data.Binary
@@ -23,8 +51,31 @@ import Prelude hiding (getContents)
 
 data Packet = Packet Version PDU Flags SessionID TransactionID PacketID deriving Show
 
-newtype Timeout = Timeout Word8 deriving (Show, Eq, Ord)
-newtype Description = Description ByteString deriving (Show, Eq)
+mkPacket :: PDU -> SessionID -> TransactionID -> PacketID -> Packet
+mkPacket pdu sid tid pid = Packet 1 pdu defFlags sid tid pid
+
+class ManyID b where
+    getAX :: Packet -> b
+    setAX :: b -> Packet -> Packet
+
+instance ManyID PDU where
+    getAX (Packet _ pdu _ _ _ _) = pdu
+    setAX pdu (Packet v _ flags sid tid pid) = Packet v pdu flags sid tid pid
+
+instance ManyID SessionID where
+    getAX (Packet _ _ _ x _ _) = x
+    setAX sid (Packet v pdu flags _ tid pid) = Packet v pdu flags sid tid pid
+
+instance ManyID PacketID where
+    getAX (Packet _ _ _  _ _ x) = x
+    setAX pid (Packet v pdu flags sid tid _) = Packet v pdu flags sid tid pid
+
+instance ManyID TransactionID where
+    getAX (Packet _ _ _  _ x _) = x
+    setAX tid (Packet v pdu flags sid _ pid) = Packet v pdu flags sid tid pid
+
+newtype Timeout = Timeout Word8 deriving (Show, Eq, Ord, Bounded, Enum)
+newtype Description = Description ByteString deriving (Show, Eq, IsString, Monoid)
 
 data Reason = Other
             | ParseError
@@ -51,40 +102,16 @@ reasonFromTag 5 = Shutdown
 reasonFromTag 6 = ByManager    
 reasonFromTag _ = error "unknown reasonFromTag"
 
-newtype Context = Context ByteString deriving (Show, Ord, Eq)
-
-instance IsString Context where
-    fromString = Context . fromString 
-    
-
-newtype Priority = Priority Word8 deriving (Show, Eq)
-{-
- Permits specifying a range in place of one of r.subtree's
- sub-identifiers.  If this value is 0, no range is being
- specified and there is no r.upper_bound field present in the
- PDU. In this case the MIB region being registered is the
- single subtree named by r.subtree.
-
- Otherwise the "r.range_subid"-th sub-identifier in r.subtree
- is a range lower bound, and the range upper bound sub-
- identifier (r.upper_bound) immediately follows r.subtree.
- In this case the MIB region being registered is the union of
- the subtrees formed by enumerating this range.
- -}
-newtype RangeSubid = RangeSubid Word8 deriving (Show, Eq)
-{-
- If r.subtree is in fact a fully qualified instance name, the
- INSTANCE_REGISTRATION bit in h.flags must be set, otherwise
- it must be cleared.  The master agent may save this
- information to optimize subsequent operational dispatching.
--}
+newtype Context = Context ByteString deriving (Show, Ord, Eq, IsString)
+newtype Priority = Priority Word8 deriving (Show, Eq, Ord, Bounded, Enum)
+newtype RangeSubid = RangeSubid Word8 deriving (Show, Eq, Ord, Bounded, Enum)
 type SubTree = OID
-newtype UpperBound = UpperBound Word32 deriving (Show, Eq)
+newtype UpperBound = UpperBound Word32 deriving (Show, Eq, Ord, Bounded, Enum)
 newtype SearchRange = SearchRange (OID, OID, Include) deriving (Show, Eq)
-newtype NonRepeaters = NonRepeaters Word16 deriving (Show, Eq)
-newtype MaxRepeaters = MaxRepeaters Word16 deriving (Show, Eq)
-newtype SysUptime = SysUptime Word32 deriving (Show, Eq)
-newtype Index = Index Word16 deriving (Show, Eq, Enum)
+newtype NonRepeaters = NonRepeaters Word16 deriving (Show, Eq, Ord, Bounded, Enum)
+newtype MaxRepeaters = MaxRepeaters Word16 deriving (Show, Eq, Ord, Bounded, Enum)
+newtype SysUptime = SysUptime Word32 deriving (Show, Eq, Ord, Bounded, Enum)
+newtype Index = Index Word16 deriving (Show, Eq, Ord, Bounded, Enum)
 
 data RError = NoAgentXError
             | OpenFailed
@@ -198,6 +225,30 @@ data PDU = Open Timeout OID Description -- 6.2.1
          | Response   SysUptime RError Index [VarBind] -- 6.2.16
          deriving (Show, Eq)
 
+
+
+fixContextFlags :: PDU -> Flags -> Flags
+fixContextFlags = fixContextFlags' . pduToContext 
+  where
+    fixContextFlags' :: Maybe Context -> Flags -> Flags
+    fixContextFlags' Nothing (Flags a b c _ d) = Flags a b c False d
+    fixContextFlags' _ (Flags a b c _ d) = Flags a b c True d
+    pduToContext :: PDU -> Maybe Context
+    pduToContext (Register x _ _ _ _ _) = x
+    pduToContext (Unregister x _ _ _ _) = x
+    pduToContext (Get x _ ) = x
+    pduToContext (GetNext x _ ) = x
+    pduToContext (GetBulk x _ _ _ ) = x
+    pduToContext (TestSet x _ ) = x
+    pduToContext (Notify x _ ) = x
+    pduToContext (Ping x ) = x
+    pduToContext (IndexAllocate x _) = x
+    pduToContext (IndexDeallocate x _) = x
+    pduToContext (AddAgentCaps x _ _) = x
+    pduToContext (RemoveAgentCaps x _ ) = x
+    pduToContext _ = Nothing
+
+
 pduToTag :: PDU -> Word8
 pduToTag Open{}            = 1
 pduToTag Close{}           = 2
@@ -225,6 +276,9 @@ class ToBuilder a where
 
 data Flags = Flags InstanceRegistration NewIndex AnyIndex NonDefaultContext BigEndian deriving (Show)
 
+defFlags :: Flags
+defFlags = Flags False False False False False
+
 instance ToBuilder (Flags -> Builder) where
     toBuilder (Flags instanceRegistration newIndex anyIndex ndc nbo) = 
         singleton $ fromListLE [instanceRegistration, newIndex, anyIndex, ndc, nbo]
@@ -240,25 +294,13 @@ type NewIndex = Bool
 type AnyIndex = Bool
 type NonDefaultContext = Bool
 
-newtype SessionID = SessionID Word32 deriving (Show, Eq)
+newtype SessionID = SessionID Word32 deriving (Show, Eq, Enum, Bounded, Ord)
 
-newtype TransactionID = TransactionID Word32 deriving (Show, Eq, Ord)
+newtype TransactionID = TransactionID Word32 deriving (Show, Eq, Ord, Enum, Bounded)
 
-newtype PacketID = PacketID Word32 deriving (Show, Eq)
+newtype PacketID = PacketID Word32 deriving (Show, Eq, Ord, Enum, Bounded)
 
-instance Enum PacketID where
-    toEnum = PacketID . fromIntegral
-    fromEnum (PacketID x) = fromIntegral x
-
-instance Enum SessionID where
-    toEnum = SessionID . fromIntegral
-    fromEnum (SessionID x) = fromIntegral x
-
-instance Enum TransactionID where
-    toEnum = TransactionID . fromIntegral
-    fromEnum (TransactionID x) = fromIntegral x
-
-newtype PayloadLenght = PayloadLenght Word32 deriving (Show, Eq)
+newtype PayloadLenght = PayloadLenght Word32 deriving (Show, Eq, Enum, Ord, Bounded)
 
 ----------------------------------------------------------------------------------------------------------------------
 -- VarBind 
@@ -383,7 +425,7 @@ valueToTag (Snmp.EndOfMibView)      = 130
 
 instance ToBuilder (Packet -> Builder) where
     toBuilder (Packet _ p f@(Flags _ _ _ _ nbo) (SessionID sid) (TransactionID tid) (PacketID pid)) =
-        let header = singleton 1 <> singleton (pduToTag p) <> toBuilder f <> singleton 0
+        let header = singleton 1 <> singleton (pduToTag p) <> toBuilder (fixContextFlags p f) <> singleton 0
             (body, PayloadLenght l) = pduToBuilder p f
         in header <> builder32 nbo sid <> builder32 nbo tid <> builder32 nbo pid <> builder32 nbo l <> body
 
@@ -395,64 +437,64 @@ pduToBuilder (Open (Timeout t) o (Description d)) (Flags _ _ _ _ bi)  =
 pduToBuilder (Close r) (Flags _ _ _ _ _)  =
     let body = singleton (reasonToTag r) <> singleton 0 <> singleton 0 <> singleton 0
     in (body, PayloadLenght 4)
-pduToBuilder (Register mc (Timeout t) (Priority p) (RangeSubid r) s mu) (Flags _ _ _ ndc bi) =  --TODO ? INSTANCE_REGISTRATION
+pduToBuilder (Register mc (Timeout t) (Priority p) (RangeSubid r) s mu) (Flags _ _ _ _ bi) =  --TODO ? INSTANCE_REGISTRATION
     let upperBound = case (r, mu) of
                           (0, _) -> empty
                           (_, Just (UpperBound u)) -> builder32 bi u
                           (_, Nothing) -> error "pduToBuilder"
-        body = toBuilder bi ndc mc 
+        body = toBuilder bi mc 
             <> singleton t <> singleton p <> singleton r <> singleton 0
             <> toBuilder bi False s
             <> upperBound
     in (body, bodyLength body)
-pduToBuilder (Unregister mc (Priority p) (RangeSubid r) s mu) (Flags _ _ _ ndc bi)  =
+pduToBuilder (Unregister mc (Priority p) (RangeSubid r) s mu) (Flags _ _ _ _ bi)  =
     let upperBound = case (r, mu) of
                           (0, _) -> empty
                           (_, Just (UpperBound u)) -> builder32 bi u
                           (_, Nothing) -> error "pduToBuilder"
-        body = toBuilder bi ndc mc
+        body = toBuilder bi mc
             <> singleton 0 <> singleton p <> singleton r <> singleton 0
             <> toBuilder bi False s
             <> upperBound
     in (body, bodyLength body)
-pduToBuilder (Get mc sr) (Flags _ _ _ ndc bi)  =
+pduToBuilder (Get mc sr) (Flags _ _ _ _ bi)  =
     let searchRangeList = Prelude.foldr (\a b -> toBuilder bi True a <> toBuilder bi False ([] :: OID)  <> b) empty sr
-        body = toBuilder bi ndc mc  <> searchRangeList
+        body = toBuilder bi mc  <> searchRangeList
     in (body, bodyLength body)
-pduToBuilder (GetNext mc sr) (Flags _ _ _ ndc bi)  =
+pduToBuilder (GetNext mc sr) (Flags _ _ _ _ bi)  =
     let searchRangeList = Prelude.foldr (\(SearchRange (s,e, _)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
-        body = toBuilder bi ndc mc <> searchRangeList
+        body = toBuilder bi mc <> searchRangeList
     in (body, bodyLength body)
-pduToBuilder (GetBulk mc (NonRepeaters nr) (MaxRepeaters mr) sr) (Flags _ _ _ ndc bi)  =
+pduToBuilder (GetBulk mc (NonRepeaters nr) (MaxRepeaters mr) sr) (Flags _ _ _ _ bi)  =
     let searchRangeList = Prelude.foldr (\(SearchRange (s,e, _)) b -> toBuilder bi True s <> toBuilder bi False e <> b) empty sr
-        body = toBuilder bi ndc mc
+        body = toBuilder bi mc
             <> builder16 bi nr <> builder16 bi mr
             <> searchRangeList
     in (body, bodyLength body)
-pduToBuilder (TestSet mc vb) (Flags _ _ _ ndc bi)  =
+pduToBuilder (TestSet mc vb) (Flags _ _ _ _ bi)  =
     let vbl = Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
-        body = toBuilder bi ndc mc <> vbl
+        body = toBuilder bi mc <> vbl
     in (body, bodyLength body)
 pduToBuilder CommitSet _  = (empty, PayloadLenght 0)
 pduToBuilder UndoSet _  = (empty, PayloadLenght 0)
 pduToBuilder CleanupSet _  = (empty, PayloadLenght 0)
-pduToBuilder (Notify mc vb) (Flags _ _ _ ndc bi)  =
-    let body = toBuilder bi ndc mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+pduToBuilder (Notify mc vb) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
     in (body, bodyLength body)
-pduToBuilder (Ping mc) (Flags _ _ _ ndc bi)  =
-    let body = toBuilder bi ndc mc
+pduToBuilder (Ping mc) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc
     in (body, bodyLength body)
-pduToBuilder (IndexAllocate mc vb) (Flags _ _ _ ndc bi)  =
-    let body = toBuilder bi ndc mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+pduToBuilder (IndexAllocate mc vb) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
     in (body, bodyLength body)
-pduToBuilder (IndexDeallocate mc vb) (Flags _ _ _ ndc bi)  =
-    let body = toBuilder bi ndc mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
+pduToBuilder (IndexDeallocate mc vb) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> Prelude.foldr (\a b -> toBuilder bi a <> b) empty vb
     in (body, bodyLength body)
-pduToBuilder (AddAgentCaps mc o (Description d)) (Flags _ _ _ ndc bi)  =
-    let body = toBuilder bi ndc mc <> toBuilder bi False o <> toBuilder bi d
+pduToBuilder (AddAgentCaps mc o (Description d)) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> toBuilder bi False o <> toBuilder bi d
     in (body, bodyLength body)
-pduToBuilder (RemoveAgentCaps mc o) (Flags _ _ _ ndc bi)  =
-    let body = toBuilder bi ndc mc <> toBuilder bi False o
+pduToBuilder (RemoveAgentCaps mc o) (Flags _ _ _ _ bi)  =
+    let body = toBuilder bi mc <> toBuilder bi False o
     in (body, bodyLength body)
 pduToBuilder (Response (SysUptime su) re (Index i) vb) (Flags _ _ _ _ bi)  =
     let body = builder32 bi su
@@ -463,10 +505,9 @@ pduToBuilder (Response (SysUptime su) re (Index i) vb) (Flags _ _ _ _ bi)  =
 bodyLength :: Builder -> PayloadLenght
 bodyLength = PayloadLenght . fromIntegral . BL.length . toLazyByteString
 
-instance ToBuilder (BigEndian -> NonDefaultContext -> Maybe Context -> Builder) where
-    toBuilder _ False _ = empty
-    toBuilder bi True (Just (Context c)) = toBuilder bi c
-    toBuilder _ True Nothing = error "uncorrected flag, or context"
+instance ToBuilder (BigEndian -> Maybe Context -> Builder) where
+    toBuilder bi (Just (Context c)) = toBuilder bi c
+    toBuilder _ Nothing = empty -- error "uncorrected flag, or context"
 
 -----------------------------------------------------------------------------------------------------------
 -- binary 
@@ -673,16 +714,9 @@ bigEndian (Flags _ _ _ _ x) = x
 nonDefCont :: Flags -> NonDefaultContext
 nonDefCont (Flags _ _ _ x _) = x
 
-sessionId :: Packet -> SessionID
-sessionId (Packet _ _ _ x _ _) = x
-
-sysUptime :: Packet -> SysUptime
-sysUptime (Packet _ (Response x _ _ _) _ _ _ _) = x
-sysUptime _ = error "sysUptime bad case"
-
-getBodySizeFromHeader :: BL.ByteString -> Int64
-getBodySizeFromHeader "" = 0
-getBodySizeFromHeader bs =
+bodySizeFromHeader :: BL.ByteString -> Int64
+bodySizeFromHeader "" = 0
+bodySizeFromHeader bs =
     let flags = flagsFromTag (BL.index bs 2)
         bo = bigEndian flags
         s = BL.drop 16 bs

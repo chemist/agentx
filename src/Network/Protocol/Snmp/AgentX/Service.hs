@@ -8,9 +8,9 @@ where
 import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
 import Network.Socket.ByteString.Lazy (recv, send)
 import Control.Concurrent (killThread, threadDelay, ThreadId)
-import Data.ByteString.Char8 (pack)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
+import Data.String (fromString)
 import Control.Applicative hiding (empty)
 import Control.Monad.State.Strict
 import Control.Monad.Reader
@@ -27,7 +27,7 @@ import qualified Data.Map.Strict as Map
 import Prelude 
 
 -- import Network.Protocol.Snmp (OID)
-import Network.Protocol.Snmp.AgentX.Protocol hiding (getValue)
+import Network.Protocol.Snmp.AgentX.Protocol 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp.AgentX.Handlers
 import Network.Protocol.Snmp.AgentX.Types
@@ -47,7 +47,7 @@ runAgent tree socket'  = do
     hSetBuffering stdout LineBuffering
     s <- newMVar =<< getSysUptime
     i <- newEmptyMVar
-    p <- newMVar (PacketID 1)
+    p <- newMVar minBound
     m <- newMVar (toZipper tree)
     ts <- newMVar Map.empty
     let st = ST s p m socket' i ts
@@ -55,7 +55,7 @@ runAgent tree socket'  = do
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
     run st $ resp >->  registrator >->  output
-    serverPid <-  fiber st $ req >-> _dp "input" >-> server
+    serverPid <-  fiber st $ req >-> _dp "in" >-> server
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
@@ -71,7 +71,7 @@ run s eff = runEffect $ runReaderP s eff
 server :: Consumer Packet AgentT ()
 server = forever $ do
     m <- await
-    ask >>= flip fiber (yield m >-> server' >-> output)
+    ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
 
 fiber :: MonadIO m => ST -> Effect AgentT () -> m ThreadId
 fiber st = liftIO . forkIO . run st
@@ -80,7 +80,7 @@ input :: Producer Packet AgentT ()
 input = forever $ do
     sock' <- sock <$> ask
     h <- liftIO $ recv sock' 20
-    b <- liftIO $ recv sock' (getBodySizeFromHeader h)
+    b <- liftIO $ recv sock' (bodySizeFromHeader h)
     yield $ decode $ h <> b
 
 output :: Consumer Packet AgentT ()
@@ -92,8 +92,12 @@ output = forever $ do
 sortInput :: Consumer Packet AgentT () -> Consumer Packet AgentT () -> Consumer Packet AgentT ()
 sortInput requests responses = forever $ await >>= sortInput'
     where
-        sortInput' m@(Packet _ Response{} _ _ _ _) = yield m >-> responses
-        sortInput' m@_ = yield m >-> requests
+        sortInput' m 
+          | isResponse m = yield m >-> responses
+          | otherwise    = yield m >-> requests
+        isResponse p = case getAX p of
+                            Response{} -> True
+                            _ -> False
 
 server' :: Pipe Packet Packet AgentT ()
 server' = forever $ await >>= lift . route >>= yieldOnlyJust 
@@ -114,15 +118,12 @@ client :: Packet -> Pipe Packet Packet AgentT ()
 client p = do
     pid <- lift getPid
     sid <- lift getSid
-    yield (setPidSid p pid sid) 
+    yield $ setAX pid . setAX sid $ p
     resp <- await
     sessionsRef <- sessions <$> ask
     sid' <- liftIO $ tryReadMVar sessionsRef
-    maybe (lift . setSid . gs $ resp) (const $ return ()) sid'
+    maybe (lift . setSid . getAX $ resp) (const $ return ()) sid'
     -- liftIO $ print $ "response: " <> show p
-    where
-      setPidSid (Packet a b c _ e _) pid sid = Packet a b c sid e pid
-      gs (Packet _ _ _ s _ _) = s
 
 _dp :: String -> Pipe Packet Packet AgentT ()
 _dp label = forever $ do
@@ -138,30 +139,26 @@ register = do
     s <- mibs <$> ask
     zipper' <- liftIO $ readMVar s
     let tree = toList $ fst zipper'
-        flags = Flags False False False False False
-        sid = SessionID 0
-        tid = TransactionID 0
-        pid = PacketID 0
-    return $ map (\x -> Packet 1 (mibToRegisterPdu x) flags sid tid pid) $ filter isObjectType tree
+    return $ map (\x -> mkPacket (mibToRegisterPdu x) minBound minBound minBound) $ filter isObjectType tree
         where
         mibToRegisterPdu :: MIB -> PDU
-        mibToRegisterPdu m = Register Nothing (Timeout 0) (Priority 127) (RangeSubid 0) (oid m) Nothing
+        mibToRegisterPdu m = Register Nothing minBound (toEnum 127) minBound (oid m) Nothing
 
 open :: AgentT Packet
 open = do
     m <- mibs <$> ask
     base <- head . toList . fst <$> (liftIO $ readMVar m)
-    let open' = Open (Timeout 0) (oid base) (Description $ "Haskell AgentX sub-aagent: " <> pack (name base))
-    return $ Packet 1 open' (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 0)
+    let open' = Open minBound (oid base) ("Haskell AgentX sub-aagent: " <> fromString (name base))
+    return $ mkPacket open' minBound minBound minBound 
 
 ping :: Packet
-ping = Packet 1 (Ping Nothing) (Flags False False False False False) (SessionID 0) (TransactionID 0) (PacketID 0)
+ping = mkPacket (Ping Nothing) minBound minBound minBound 
 
 getSid :: AgentT SessionID
 getSid = do
     sesRef <- sessions <$> ask
     s <- liftIO $ tryReadMVar sesRef
-    return $ fromMaybe (SessionID 0) s
+    return $ fromMaybe minBound s
 
 setSid :: SessionID -> AgentT ()
 setSid sid = do
@@ -178,4 +175,4 @@ getPid = do
 getSysUptime :: IO SysUptime
 getSysUptime = do
     (t :: Integer) <- flip div' 1 <$> getPOSIXTime
-    return $ SysUptime $ fromIntegral t
+    return . toEnum . fromIntegral $ t
