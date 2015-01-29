@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Network.Protocol.Snmp.AgentX.Handlers where
 
 import Control.Applicative
@@ -5,6 +6,7 @@ import Control.Monad.State
 import Control.Monad.Reader
 import Control.Concurrent.MVar
 import qualified Data.Map.Strict as Map
+import Data.Maybe
 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp (OID)
@@ -36,11 +38,12 @@ splitByError xs =
             in (x : fst splitted, snd splitted)
 
 mibToVarBind :: MIB -> VarBind
-mibToVarBind y = VarBind (oid y) (unLeft $ val y)
+mibToVarBind y = VarBind (oid y) (unDefault $ val y)
 
-unLeft :: MValue -> Value
-unLeft (NoContext a) = a
-unLeft _ = error "unLeft"
+unDefault :: ContextedValue -> Value
+unDefault x = case Map.lookup "" x of
+                   Just v -> v
+                   Nothing -> error "unDefault"
 
 route :: Packet -> AgentT (Maybe Packet)
 route p = route' p (getPdu p) >>= return . fmap (setPdu p)
@@ -97,10 +100,13 @@ getHandler :: [OID] -> Maybe Context -> AgentT [Either RError MIB]
 getHandler xs mcontext = fmap Right <$> (filterByContext mcontext <$> bridgeToBase (findMany xs))
 
 filterByContext :: Maybe Context -> [MIB] -> [MIB]
-filterByContext mcontext xs = map (fun mcontext) xs
-  where
-  fun Nothing mv = case val mv of
-                        NoContext{} -> mv
+filterByContext c xs = filter fun xs
+    where
+    fun x = case Map.lookup (fromMaybe "" c)  (val x) of
+                    Nothing -> False
+                    _ -> True
+            
+
 
 getNextHandler :: Maybe Context -> [SearchRange] -> AgentT [Either RError MIB]
 getNextHandler mcontext xs = 
@@ -134,9 +140,9 @@ setOne :: VarBind -> AgentT (Either RError MIB)
 setOne (VarBind oid' _value') = do
     m <- bridgeToBase (findOne oid')
     liftIO $ print m
-    case (val m, upd m) of
-         (NoContext NoSuchInstance, _) -> return $ Left NotWritable
-         (NoContext NoSuchObject, _) -> return $ Left NotWritable
+    case (Map.lookup "" (val m), upd m) of
+         (Just NoSuchInstance, _) -> return $ Left NotWritable
+         (Just NoSuchObject, _) -> return $ Left NotWritable
          (_, Fixed) -> return $ Left NotWritable
          (_, Read _) -> return $ Left NotWritable
          _ -> return $ Right m

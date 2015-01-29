@@ -23,8 +23,8 @@ import Pipes
 import Pipes.Lift
 import Control.Concurrent.MVar
 import Data.Maybe
-import Data.Map (empty)
-import Prelude hiding (filter)
+import qualified Data.Map.Strict as Map 
+import Prelude 
 
 -- import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Protocol hiding (getValue)
@@ -49,18 +49,18 @@ runAgent tree socket'  = do
     i <- newEmptyMVar
     p <- newMVar (PacketID 1)
     m <- newMVar (toZipper tree)
-    ts <- newMVar empty
+    ts <- newMVar Map.empty
     let st = ST s p m socket' i ts
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
-    run st $ resp >-> registrator >-> output
-    serverPid <-  fiber st $ req >-> server
+    run st $ resp >->  registrator >->  output
+    serverPid <-  fiber st $ req >-> _dp "input" >-> server
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
     _ <-  getLine :: IO String
-    void $ mapM (liftIO . killThread) [serverPid, agentPid, sortPid] -- p2,p3,p4,p5, 
+    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid] -- p2,p3,p4,p5, 
 
 ---------------------------------------------------------------------------
 -- Pipes eval 
@@ -142,10 +142,10 @@ register = do
         sid = SessionID 0
         tid = TransactionID 0
         pid = PacketID 0
-    return $ map (\x -> Packet 1 (mibToRegisterPdu x) flags sid tid pid) $ tree
-    where
-      mibToRegisterPdu :: MIB -> PDU
-      mibToRegisterPdu m = Register Nothing (Timeout 0) (Priority 127) (RangeSubid 0) (oid m) Nothing
+    return $ map (\x -> Packet 1 (mibToRegisterPdu x) flags sid tid pid) $ filter isObjectType tree
+        where
+        mibToRegisterPdu :: MIB -> PDU
+        mibToRegisterPdu m = Register Nothing (Timeout 0) (Priority 127) (RangeSubid 0) (oid m) Nothing
 
 open :: AgentT Packet
 open = do

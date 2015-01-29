@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -25,7 +26,9 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , name
 , upd
 , isWritable
-, MValue(..)
+, ContextedValue
+, defaultContext
+, isObjectType
 )
 where
 
@@ -33,11 +36,11 @@ import Data.Typeable (Typeable)
 import Data.Monoid ((<>))
 import Data.Maybe (fromJust, isJust, fromMaybe)
 import Data.List (stripPrefix, sort)
-import qualified Data.Map.Strict as Map
 import Control.Monad.State.Strict (StateT, get, put, liftIO, modify)
 import Control.Monad
 import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw)
+import qualified Data.Map.Strict as Map
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..), RError, Context)
@@ -53,13 +56,14 @@ data MIB = Object
   , int :: Integer
   , parent :: Parent 
   , name :: Name 
-  , val :: MValue
+  , val :: ContextedValue
   , upd :: Update
-  } deriving (Eq)
+  } deriving Eq
 
-data MValue = NoContext Value 
-            | MapContext (Map.Map Context Value)
-            deriving (Eq, Show)
+type ContextedValue = Map.Map Context Value
+
+defaultContext :: Value -> ContextedValue
+defaultContext v = Map.singleton "" v
 
 instance Ord MIB where
     compare x y = compare (oid x) (oid y)
@@ -77,9 +81,9 @@ type Name = String
 
 data Update = Fixed
             | Read 
-              { readAIO :: IO MValue }
+              { readAIO :: IO ContextedValue }
             | ReadWrite 
-              { readAIO   :: IO MValue
+              { readAIO   :: IO ContextedValue
               , saveAIO   :: Maybe Context -> Value -> IO () 
               , checkAIO  :: Maybe Context -> Value -> IO RError
               }
@@ -102,9 +106,8 @@ instance Eq UTree where
                 
 data MIBTree = Root OID Name MIBTree
              | Node Integer Parent Name MIBTree MIBTree (Maybe UTree)
-             | Leaf Integer Parent Name MIBTree MValue Update
+             | Leaf Integer Parent Name MIBTree ContextedValue Update
              | Empty
-             deriving (Show, Eq)
 
 singleton :: MIB -> MIBTree 
 singleton m = singleton' (oid m, m)
@@ -192,14 +195,14 @@ mkModule o p n  = Object o (last o) p n Nothing
 mkObject :: Integer -> Parent -> Name -> Maybe UTree -> MIB
 mkObject = Object []
 
-mkObjectType :: Integer -> Parent -> Name -> MValue -> Update -> MIB
+mkObjectType :: Integer -> Parent -> Name -> ContextedValue -> Update -> MIB
 mkObjectType = ObjectType []
 
 ---------------------------------------------------------------------------------------------------------
 -- zipper
 ---------------------------------------------------------------------------------------------------------
 
-data Move = Next MIBTree | Level MIBTree deriving (Show)
+data Move = Next MIBTree | Level MIBTree
 
 type Moving = [Move]
 
@@ -274,7 +277,7 @@ updateTree = do
     isDynamic (Object _ _ _ _ x) = x
     isDynamic _ = Nothing
 
-setValue :: MIB -> MValue -> MIB
+setValue :: MIB -> ContextedValue -> MIB
 setValue (ObjectType o i p n _ u) v = ObjectType o i p n v u
 setValue _ _ = throw CantReadValue
 
@@ -308,8 +311,8 @@ findOne xs = do
     t <- isFocusObjectType
     case (o == xs, t) of
          (True, True) -> update =<< getFocus <$> get
-         (True, False) -> return $ ObjectType o (last o) "" "" (NoContext NoSuchObject) Fixed
-         _ -> return $ ObjectType xs (last xs) "" "" (NoContext NoSuchInstance) Fixed
+         (True, False) -> return $ ObjectType o (last o) "" "" (defaultContext NoSuchObject) Fixed
+         _ -> return $ ObjectType xs (last xs) "" "" (defaultContext NoSuchInstance) Fixed
 
 findMany :: [OID] -> Base [MIB]
 findMany [] = return []
@@ -375,7 +378,7 @@ inRange :: SearchRange -> MIB -> MIB
 inRange (SearchRange (from, to, _)) m = 
   if from <= oid m && oid m < to 
      then m 
-     else (ObjectType from 0 "" "" (NoContext EndOfMibView) Fixed)
+     else (ObjectType from 0 "" "" (defaultContext EndOfMibView) Fixed)
 
 findClosestObject' :: Bool -> OID -> Base MIB
 findClosestObject' back oid' = do
@@ -394,7 +397,7 @@ findClosestObject' back oid' = do
              st <- get
              case (goUp st) of
                   Just ust -> put ust >> findClosestObject' True oid'
-                  Nothing -> return $ ObjectType oid' 0 "" "" (NoContext EndOfMibView) Fixed
+                  Nothing -> return $ ObjectType oid' 0 "" "" (defaultContext EndOfMibView) Fixed
 
 hasLevel :: StateT Zipper IO Bool
 hasLevel = isJust . goLevel <$> get
