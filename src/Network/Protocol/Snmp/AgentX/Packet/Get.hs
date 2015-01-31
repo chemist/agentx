@@ -1,7 +1,5 @@
 module Network.Protocol.Snmp.AgentX.Packet.Get 
-( decodeFlags
-, get32
-, parsePdu
+( getPacket
 )
 where
 
@@ -13,6 +11,10 @@ import Network.Protocol.Snmp.AgentX.Packet.Types ( bigEndian
                                                  , VarBind(..)
                                                  , Context(..)
                                                  , SearchRange(..) 
+                                                 , Packet(..)
+                                                 , PacketID(..)
+                                                 , TransactionID(..)
+                                                 , SessionID(..)
                                                  )
 import Network.Protocol.Snmp (Value(..), OID)
 
@@ -24,6 +26,19 @@ import Data.Bits.Bitwise (toListLE)
 import Data.Monoid ((<>))
 import Control.Applicative hiding (empty)
 import Data.Label
+
+getPacket :: Get Packet
+getPacket = do
+    version <- getWord8 
+    pduTag <- getWord8
+    flags <- decodeFlags <$> getWord8
+    _reserved <- getWord8
+    sid <- get32 flags 
+    tid <- get32 flags 
+    pid <- get32 flags 
+    bodySize <- get32 flags 
+    pdu <- parsePdu pduTag flags bodySize
+    return $ Packet version pdu flags (SessionID sid) (TransactionID tid) (PacketID pid)
 
 decodeFlags :: Word8 -> Flags
 decodeFlags x =

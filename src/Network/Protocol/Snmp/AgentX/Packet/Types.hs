@@ -6,6 +6,7 @@ module Network.Protocol.Snmp.AgentX.Packet.Types where
 import Data.Label
 
 import Data.Word
+import Data.Binary.Builder (Builder)
 import Data.ByteString (ByteString)
 import Data.String
 
@@ -151,7 +152,14 @@ data PDU = Open
   , _varBinds     :: [VarBind] -- 6.2.16
   } deriving (Show, Eq)
 
-mkLabels [''PDU, ''Packet, ''Flags, ''VarBind, ''SearchRange]
+data ST = ST 
+  { _packet   :: Packet
+  , _header   :: Builder
+  , _body     :: Builder
+  , _bodySize :: Word32
+  } 
+
+mkLabels [''PDU, ''Packet, ''Flags, ''VarBind, ''SearchRange, ''ST ]
 
 class Tag a b where
     tag :: a -> b
