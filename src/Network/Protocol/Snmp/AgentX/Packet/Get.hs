@@ -1,5 +1,7 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Network.Protocol.Snmp.AgentX.Packet.Get 
 ( getPacket
+, bodySizeFromHeader
 )
 where
 
@@ -20,12 +22,15 @@ import Network.Protocol.Snmp (Value(..), OID)
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Data.Binary hiding (get)
 import Data.Binary.Get 
 import Data.Bits.Bitwise (toListLE)
 import Data.Monoid ((<>))
 import Control.Applicative hiding (empty)
+import Data.Int
 import Data.Label
+import Debug.Trace
 
 getPacket :: Get Packet
 getPacket = do
@@ -37,7 +42,7 @@ getPacket = do
     tid <- get32 flags 
     pid <- get32 flags 
     bodySize <- get32 flags 
-    pdu <- parsePdu pduTag flags bodySize
+    pdu <- trace ("size " ++ show bodySize) parsePdu pduTag flags bodySize
     return $ Packet version pdu flags (SessionID sid) (TransactionID tid) (PacketID pid)
 
 decodeFlags :: Word8 -> Flags
@@ -261,6 +266,14 @@ parsePdu t f s
            then return $ Response sysuptime rerror index []
            else Response sysuptime rerror index <$> (getVarBindList f [])
     | otherwise = error "parse pdu unknown tag"
+
+
+bodySizeFromHeader :: BL.ByteString -> Int64
+bodySizeFromHeader "" = 0
+bodySizeFromHeader bs =
+    let flags = decodeFlags (BL.index bs 2)
+        s = BL.drop 16 bs
+    in fromIntegral $ runGet (get32 flags) s
 
 
 

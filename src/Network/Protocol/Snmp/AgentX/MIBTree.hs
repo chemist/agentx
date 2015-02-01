@@ -41,9 +41,10 @@ import Control.Monad
 import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw)
 import qualified Data.Map.Strict as Map
+import qualified Data.Label as DL
 
 import Network.Protocol.Snmp (Value(..), OID)
-import Network.Protocol.Snmp.AgentX.Protocol (SearchRange(..), RError, Context)
+import Network.Protocol.Snmp.AgentX.Packet (SearchRange, RError, Context, include, startOID, endOID, SearchRange)
 
 data MIB = Object 
   { oid :: OID
@@ -349,36 +350,37 @@ getInt (Leaf i _ _ _ _ _) = i
 getInt _ = error "bad getInt"
 
 findNext :: SearchRange -> Base MIB
-findNext s@(SearchRange (start, end, True)) = do
-    goClosest start
+findNext s 
+  | DL.get include s = do
+    goClosest (DL.get startOID s)
     o <- getFocus <$> get
     t <- isFocusObjectType
-    if oid o == start && t
+    if oid o == (DL.get startOID s) && t
        then inRange s <$> update o
-       else inRange s <$> findNext (SearchRange (start, end, False))
-findNext s@(SearchRange (start, _end, False)) = do
-    goClosest start
+       else inRange s <$> findNext (DL.set include False s)
+  | otherwise = do
+    goClosest (DL.get startOID s)
     l <- hasLevel
     n <- hasNext
     case (l, n) of
          (True, _) -> do
              modify $ fromJust . goLevel
-             m <- findClosestObject' False start
+             m <- findClosestObject' False (DL.get startOID s)
              inRange s <$> update m
          (False, True) -> do
              modify $ fromJust . goNext
-             m <- findClosestObject' False start
+             m <- findClosestObject' False (DL.get startOID s)
              inRange s <$> update m
          (False, False) -> do
              modify $ fromJust . goUp
-             m <- findClosestObject' True start
+             m <- findClosestObject' True (DL.get startOID s)
              inRange s <$> update m
 
 inRange :: SearchRange -> MIB -> MIB
-inRange (SearchRange (from, to, _)) m = 
-  if from <= oid m && oid m < to 
+inRange s m = 
+  if (DL.get startOID s) <= oid m && oid m < (DL.get endOID s)
      then m 
-     else (ObjectType from 0 "" "" (defaultContext EndOfMibView) Fixed)
+     else (ObjectType (DL.get startOID s) 0 "" "" (defaultContext EndOfMibView) Fixed)
 
 findClosestObject' :: Bool -> OID -> Base MIB
 findClosestObject' back oid' = do

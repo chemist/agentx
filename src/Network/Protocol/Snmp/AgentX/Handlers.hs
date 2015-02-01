@@ -7,10 +7,11 @@ import Control.Monad.Reader
 import Control.Concurrent.MVar
 import qualified Data.Map.Strict as Map
 import Data.Maybe
+import qualified Data.Label as DL
 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp (OID)
-import Network.Protocol.Snmp.AgentX.Protocol 
+import Network.Protocol.Snmp.AgentX.Packet
 import Network.Protocol.Snmp.AgentX.Types
 import Network.Protocol.Snmp (Value(..))
 -- import Debug.Trace
@@ -45,7 +46,7 @@ splitByError xs =
             in (x : fst splitted, snd splitted)
 
 route :: Packet -> AgentT (Maybe Packet)
-route p = route' (getAX p) >>= return . fmap (flip setAX p)
+route p = route' (DL.get pdu p) >>= return . fmap (flip (DL.set pdu) p)
   where
     route' :: PDU -> AgentT (Maybe PDU)
     route' (Get mcontext oids) = makePdu mcontext =<< getHandler oids mcontext
@@ -56,7 +57,7 @@ route p = route' (getAX p) >>= return . fmap (flip setAX p)
         tr <- transactions <$> ask
         nowref <- sysuptime <$> ask
         now <- liftIO . readMVar $ nowref
-        liftIO . modifyMVar_ tr $ return . Map.insert (getAX p) (Transaction mcontext updatesL (map vbl vbs) TestSetT) 
+        liftIO . modifyMVar_ tr $ return . Map.insert (DL.get tid p) (Transaction mcontext updatesL (map vbl vbs) TestSetT) 
         case firstBad of
              Nothing -> return . Just $ Response now NoAgentXError index vbs
              Just err -> return . Just $ Response now err index (take (fromEnum index) vbs)
@@ -64,21 +65,21 @@ route p = route' (getAX p) >>= return . fmap (flip setAX p)
         vbl (VarBind _ v) = v
     route' CommitSet = do
         tr <- transactions <$> ask
-        st <- Map.lookup (getAX p) <$> (liftIO . readMVar $ tr)
+        st <- Map.lookup (DL.get tid p) <$> (liftIO . readMVar $ tr)
         nowref <- sysuptime <$> ask
         now <- liftIO . readMVar $ nowref
         case st of
              Nothing -> return . Just $ Response now CommitFailed  minBound []
              Just (Transaction mcontext upds vbs TestSetT) -> do
                  liftIO $ mapM_ (\(f, a) -> f mcontext a) $ zip (map saveAIO upds) vbs
-                 liftIO $ modifyMVar_ tr $ return . Map.update (const . Just $ Transaction mcontext upds vbs CleanupSetT) (getAX p)
+                 liftIO $ modifyMVar_ tr $ return . Map.update (const . Just $ Transaction mcontext upds vbs CleanupSetT) (DL.get tid p)
                  return . Just $ Response now NoAgentXError minBound []
              Just _ -> return . Just $ Response now CommitFailed minBound []
     route' CleanupSet = do
         liftIO $ print p
         tr <- transactions <$> ask
         liftIO $ print =<< readMVar tr
-        liftIO . modifyMVar_ tr $ return . Map.delete (getAX p) 
+        liftIO . modifyMVar_ tr $ return . Map.delete (DL.get tid p) 
         return Nothing
     
     route' _ = do

@@ -6,7 +6,6 @@ module Network.Protocol.Snmp.AgentX.Packet.Types where
 import Data.Label
 
 import Data.Word
-import Data.Binary.Builder (Builder)
 import Data.ByteString (ByteString)
 import Data.String
 
@@ -91,75 +90,44 @@ data RError = NoAgentXError
             | UndoFailed
             deriving (Show, Eq)
 
-data PDU = Open 
-  { _timeout      :: Word8
-  , _oid          :: OID 
-  , _description  :: ByteString -- 6.2.1
-  }      | Close 
-  { _reason       :: Reason                 -- 6.2.2
-  }      | Register   
-  { _context      :: Maybe Context 
-  , _timeout      :: Word8
-  , _priority     :: Word8
-  , _rangeSubid   :: Word8  
-  , _subtree      :: OID 
-  , _upperBound   :: Maybe Word32 -- 6.2.3
-  }      | Unregister 
-  { _context      :: Maybe Context        
-  , _priority     :: Word8 
-  , _rangeSubid   :: Word8
-  , _subtree      :: OID 
-  , _upperBound   :: Maybe Word32 -- 6.2.4
-  }      | Get        
-  { _context      :: Maybe Context 
-  , _oids         :: [OID] -- 6.2.5
-  }      | GetNext    
-  { _context      :: Maybe Context 
-  , _searchRanges :: [SearchRange] -- 6.2.6
-  }      | GetBulk    
-  { _context      :: Maybe Context 
-  , _nonRepeaters :: Word16 
-  , _maxRepeaters :: Word16 
-  , _searchRanges :: [SearchRange] -- 6.2.7
-  }      | TestSet    
-  { _context      :: Maybe Context 
-  , _varBinds     :: [VarBind]  -- 6.2.8
-  }      | CommitSet -- 6.2.9
+type Timeout = Word8
+type Priority = Word8
+type RangeSubid = Word8
+type Description = ByteString
+type MContext = Maybe Context
+type UpperBound = Maybe Word32
+type SysUptime = Word32
+type Index = Word16
+type NonRepeaters = Word16
+type MaxRepeaters = Word16
+
+
+data PDU = Open Timeout OID Description -- 6.2.1
+         | Close  Reason                 -- 6.2.2
+         | Register MContext Timeout Priority RangeSubid OID UpperBound -- 6.2.3
+         | Unregister MContext Word8 Word8 OID UpperBound -- 6.2.4
+         | Get MContext [OID] -- 6.2.5
+         | GetNext MContext [SearchRange] -- 6.2.6
+         | GetBulk MContext NonRepeaters MaxRepeaters [SearchRange] -- 6.2.7
+         | TestSet MContext [VarBind] -- 6.2.8
+         | CommitSet -- 6.2.9
          | UndoSet -- 6.2.9
          | CleanupSet -- 6.2.9
-         | Notify 
-  { _context      :: Maybe Context 
-  , _varBinds     :: [VarBind] -- 6.2.10
-  }      | Ping       
-  { _context      :: Maybe Context  -- 6.2.11
-  }      | IndexAllocate   
-  { _context      :: Maybe Context 
-  , _varBinds     :: [VarBind] -- 6.2.12
-  }      | IndexDeallocate  -- 6.2.13
-  { _context      :: Maybe Context 
-  , _varBinds     :: [VarBind] -- 6.2.12
-  }      | AddAgentCaps    
-  { _context      :: Maybe Context 
-  , _oid          :: OID 
-  , _description  :: ByteString  -- 6.2.14
-  }      | RemoveAgentCaps 
-  { _context      :: Maybe Context 
-  , _oid          :: OID  -- 6.2.15
-  }      | Response   
-  { _sysUptime    :: Word32 
-  , _rerror       :: RError 
-  , _index        :: Word16 
-  , _varBinds     :: [VarBind] -- 6.2.16
-  } deriving (Show, Eq)
+         | Notify MContext [VarBind] -- 6.2.10
+         | Ping MContext -- 6.2.11
+         | IndexAllocate MContext [VarBind] -- 6.2.12
+         | IndexDeallocate MContext [VarBind] -- 6.2.13
+         | AddAgentCaps MContext OID Description -- 6.2.14
+         | RemoveAgentCaps MContext OID  -- 6.2.15
+         | Response SysUptime RError Index [VarBind] -- 6.2.16
+         deriving (Show, Eq)
 
 data ST = ST 
   { _packet   :: Packet
-  , _header   :: Builder
-  , _body     :: Builder
   , _bodySize :: Word32
   } 
 
-mkLabels [''PDU, ''Packet, ''Flags, ''VarBind, ''SearchRange, ''ST ]
+mkLabels [''Packet, ''Flags, ''VarBind, ''SearchRange, ''ST ]
 
 class Tag a b where
     tag :: a -> b
