@@ -55,8 +55,9 @@ runAgent tree socket'  = do
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
-    run st $ resp >-> _dp "r" >-> registrator >-> _dp "ro" >->  output
-    serverPid <-  fiber st $ req >-> _dp "in" >-> server
+    run st $ resp >-> registrator >->  output
+    serverPid <-  fiber st $ req >-> server
+    -- serverPid <-  fiber st $ req >-> _dp "in " >-> server
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
@@ -72,7 +73,8 @@ run s eff = runEffect $ runReaderP s eff
 server :: Consumer Packet AgentT ()
 server = forever $ do
     m <- await
-    ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
+    -- ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
+    ask >>= flip fiber (yield m >-> server' >-> output)
 
 fiber :: MonadIO m => ST -> Effect AgentT () -> m ThreadId
 fiber st = liftIO . forkIO . run st

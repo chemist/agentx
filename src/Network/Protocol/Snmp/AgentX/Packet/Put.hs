@@ -22,8 +22,6 @@ import Prelude hiding ((.))
 import Network.Protocol.Snmp.AgentX.Packet.Types
 import Network.Protocol.Snmp (Value(..), OID)
 
-import Debug.Trace
-
 type Pack = State ST
 
 putPacket :: Packet -> Put
@@ -43,22 +41,22 @@ pack = do
     TransactionID tid' <- DLM.gets (tid . packet)
     psid <- pack32 sid'
     ppid <- pack32 pid'
-    ptid <- trace ("in pack " ++ show (toLazyByteString s)) pack32 tid'
+    ptid <- pack32 tid'
     return $ singleton 1 <> singleton (tag p) <> f <> singleton 0 
           <> psid <> ptid <> ppid <> s <> b
 
 packSize :: Pack Builder 
 packSize = do
     s <- DLM.gets bodySize
-    trace ("size in put " ++ show s) pack32 s 
+    pack32 s 
 
 
 fixSize :: Word32 -> Pack ()
-fixSize x = trace ("fix " ++ show x) DLM.modify bodySize (+ x)
+fixSize x = DLM.modify bodySize (+ x)
 
 packWord :: (w -> Builder) -> (w -> Builder) -> w -> Pack Builder
 packWord be le w = do
-    b <-  gets ( nonDefaultContext . flags . packet )
+    b <-  gets ( bigEndian . flags . packet )
     if b then return (be w) else return (le w)
 
 pack32 :: Word32 -> Pack Builder
@@ -103,7 +101,7 @@ instance SizedBuilder ByteString where
         s <- packsz bsLen
         fixSize bsLen
         fixSize tailLen
-        trace ("bsLen " ++ show bsLen ++ " tailLen " ++ show tailLen) return $ s <> fromByteString bs <> tailB
+        return $ s <> fromByteString bs <> tailB
         where
         bsLen = fromIntegral $ B.length bs
         tailB = fromByteString $ B.replicate (fromIntegral tailLen) 0x00
