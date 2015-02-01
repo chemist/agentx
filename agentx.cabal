@@ -51,6 +51,7 @@ library
                      , bytestring
                      , bitwise
                      , network
+                     , fclabels
                      , mtl
                      , transformers
                      , time

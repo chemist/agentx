@@ -24,10 +24,11 @@ import Pipes.Lift
 import Control.Concurrent.MVar
 import Data.Maybe
 import qualified Data.Map.Strict as Map 
+import qualified Data.Label as DL
 import Prelude 
 
 -- import Network.Protocol.Snmp (OID)
-import Network.Protocol.Snmp.AgentX.Protocol 
+import Network.Protocol.Snmp.AgentX.Packet 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp.AgentX.Handlers
 import Network.Protocol.Snmp.AgentX.Types
@@ -54,8 +55,9 @@ runAgent tree socket'  = do
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
-    run st $ resp >->  registrator >->  output
-    serverPid <-  fiber st $ req >-> _dp "in" >-> server
+    run st $ resp >-> registrator >->  output
+    serverPid <-  fiber st $ req >-> server
+    -- serverPid <-  fiber st $ req >-> _dp "in " >-> server
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
@@ -71,7 +73,8 @@ run s eff = runEffect $ runReaderP s eff
 server :: Consumer Packet AgentT ()
 server = forever $ do
     m <- await
-    ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
+    -- ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
+    ask >>= flip fiber (yield m >-> server' >-> output)
 
 fiber :: MonadIO m => ST -> Effect AgentT () -> m ThreadId
 fiber st = liftIO . forkIO . run st
@@ -95,7 +98,7 @@ sortInput requests responses = forever $ await >>= sortInput'
         sortInput' m 
           | isResponse m = yield m >-> responses
           | otherwise    = yield m >-> requests
-        isResponse p = case getAX p of
+        isResponse p = case DL.get pdu p of
                             Response{} -> True
                             _ -> False
 
@@ -116,13 +119,13 @@ registrator = do
 
 client :: Packet -> Pipe Packet Packet AgentT ()
 client p = do
-    pid <- lift getPid
-    sid <- lift getSid
-    yield $ setAX pid . setAX sid $ p
+    pid' <- lift getPid
+    sid' <- lift getSid
+    yield $ DL.set pid pid' (DL.set sid sid' p)
     resp <- await
     sessionsRef <- sessions <$> ask
-    sid' <- liftIO $ tryReadMVar sessionsRef
-    maybe (lift . setSid . getAX $ resp) (const $ return ()) sid'
+    sid'' <- liftIO $ tryReadMVar sessionsRef
+    maybe (lift . setSid . (DL.get sid) $ resp) (const $ return ()) sid''
     -- liftIO $ print $ "response: " <> show p
 
 _dp :: String -> Pipe Packet Packet AgentT ()
@@ -161,10 +164,10 @@ getSid = do
     return $ fromMaybe minBound s
 
 setSid :: SessionID -> AgentT ()
-setSid sid = do
+setSid sid' = do
     sesRef <- sessions <$> ask
-    liftIO $ putMVar sesRef sid
-    liftIO $ print $ "set sid " ++ show sid
+    liftIO $ putMVar sesRef sid'
+    liftIO $ print $ "set sid " ++ show sid'
     
 
 getPid :: AgentT PacketID

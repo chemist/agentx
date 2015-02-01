@@ -8,7 +8,7 @@ import Control.Applicative
 import Data.Tuple (swap)
 import Data.Map
 
-import Network.Protocol.Snmp.AgentX.Protocol 
+import Network.Protocol.Snmp.AgentX.Packet 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp
 
