@@ -51,6 +51,10 @@ data RError = NoAgentXError
             -- 7.2.4.1
 data TestError 
             = NoTestError
+            | TooBig
+            | NoSuchName
+            | BadValue
+            | ReadOnly
             | GenError
             | NoAccess
             | WrongType
@@ -207,6 +211,10 @@ instance Tag RError Word16 where
 
 instance Tag TestError Word16 where
     tag NoTestError           = 0
+    tag TooBig                = 1
+    tag NoSuchName            = 2
+    tag BadValue              = 3
+    tag ReadOnly              = 4
     tag GenError              = 5
     tag NoAccess              = 6
     tag WrongType             = 7
@@ -219,6 +227,10 @@ instance Tag TestError Word16 where
     tag NotWritable           = 17
     tag InconsistentName      = 18
     unTag 0   = NoTestError
+    unTag 1   = TooBig                
+    unTag 2   = NoSuchName            
+    unTag 3   = BadValue              
+    unTag 4   = ReadOnly              
     unTag 5   = GenError            
     unTag 6   = NoAccess            
     unTag 7   = WrongType           

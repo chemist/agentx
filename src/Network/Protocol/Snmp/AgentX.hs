@@ -15,6 +15,7 @@ module Network.Protocol.Snmp.AgentX
 , mkObjectType
 , defaultContext
 , agent
+, genError
 )
 where
 
@@ -32,5 +33,8 @@ import Network.Protocol.Snmp.AgentX.MIBTree ( MIBTree
                                             , defaultContext
                                             )
 import Network.Protocol.Snmp.AgentX.Packet (TestError(..), CommitError(..), UndoError(..), Context)
+
+genError :: TestError
+genError = GenError
 
 
