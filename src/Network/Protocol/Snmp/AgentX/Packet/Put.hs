@@ -158,9 +158,11 @@ instance SizedBuilder PDU where
         poid         <-  packOID False o
         pdescription <-  packsz d 
         fixSize 4
+        fixContextFlags Nothing
         return $ (singleton t) <> singleton 0 <> singleton 0 <> singleton 0 <> poid <> pdescription
     packsz (Close er) = do
         fixSize 4
+        fixContextFlags Nothing
         return $ singleton (tag er) <> singleton 0 <> singleton 0 <> singleton 0
     packsz (Register mc t p rs oi mu) = do
         pcontext <- packsz mc
@@ -202,9 +204,9 @@ instance SizedBuilder PDU where
         pcontext <- packsz mc
         ys <- mapM packsz xs
         return $ pcontext <> mconcat ys
-    packsz CommitSet = return empty
-    packsz UndoSet = return empty
-    packsz CleanupSet = return empty
+    packsz CommitSet = fixContextFlags Nothing >>  return empty
+    packsz UndoSet = fixContextFlags Nothing >>  return empty
+    packsz CleanupSet = fixContextFlags Nothing >>  return empty
     packsz (Notify mc xs) = do
         pcontext <- packsz mc
         ys <- mapM packsz xs
@@ -232,4 +234,5 @@ instance SizedBuilder PDU where
         perror    <-  packsz (tag re :: Word16)
         pindex     <- packsz i
         ys <- mapM packsz xs
+        fixContextFlags Nothing
         return $ psysuptime <> perror <> pindex <> mconcat ys

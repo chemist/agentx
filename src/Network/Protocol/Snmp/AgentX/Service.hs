@@ -57,7 +57,7 @@ runAgent tree socket'  = do
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
     run st $ resp >-> registrator >->  output
     serverPid <-  fiber st $ req >-> server
-    -- serverPid <-  fiber st $ req >-> _dp "in " >-> server
+--    serverPid <-  fiber st $ req >-> _dp "in " >-> server
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
@@ -84,12 +84,14 @@ input = forever $ do
     sock' <- sock <$> ask
     h <- liftIO $ recv sock' 20
     b <- liftIO $ recv sock' (bodySizeFromHeader h)
+--    liftIO $ print $ (decode  $ h <> b :: Packet )
     yield $ decode $ h <> b
 
 output :: Consumer Packet AgentT ()
 output = forever $ do
     sock' <- sock <$> ask
     bs <- await
+--    liftIO $ print $ (decode . encode $ bs :: Packet )
     void . liftIO $ send sock' (encode bs)
 
 sortInput :: Consumer Packet AgentT () -> Consumer Packet AgentT () -> Consumer Packet AgentT ()
@@ -142,10 +144,16 @@ register = do
     s <- mibs <$> ask
     zipper' <- liftIO $ readMVar s
     let tree = toList $ fst zipper'
-    return $ map (\x -> mkPacket (mibToRegisterPdu x) minBound minBound minBound) $ filter isObjectType tree
+--     liftIO $ print $ concatMap mibToPackets $ filter isObjectType tree
+    return $ concatMap mibToPackets $ filter isObjectType tree
         where
-        mibToRegisterPdu :: MIB -> PDU
-        mibToRegisterPdu m = Register Nothing minBound (toEnum 127) minBound (oid m) Nothing
+        mibToPackets :: MIB -> [Packet]
+        mibToPackets m =
+            let context = map contextToMContext $ Map.keys (val m)
+                contextToMContext "" = Nothing
+                contextToMContext x  = Just x
+                pduList = map (\x -> Register x minBound (toEnum 127) minBound (oid m) Nothing) context
+            in map (\x -> mkPacket x minBound minBound minBound) pduList
 
 open :: AgentT Packet
 open = do
