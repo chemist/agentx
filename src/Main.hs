@@ -2,10 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
-import Network.Protocol.Snmp (Value(..))
-import Network.Protocol.Snmp.AgentX.Service (agent)
-import Network.Protocol.Snmp.AgentX.MIBTree
-import Network.Protocol.Snmp.AgentX.Packet (RError(..))
+import Network.Protocol.Snmp.AgentX
 import Network.Info
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
@@ -36,12 +33,22 @@ contextedValue = Map.fromList [ ("context1", String "context1")
 
 updateName :: IORef Value -> Update
 updateName agentName = ReadWrite (defaultContext <$> readIORef agentName) 
-                                 (const $ writeIORef agentName)
-                                 (const $ checkType agentName)
+                                 (commitSet agentName) 
+                                 (testSet agentName)
+                                 (undoSet agentName)
 
-checkType :: IORef Value -> Value -> IO RError
-checkType _ (String _) = return NoAgentXError
-checkType _ _ = return WrongType
+commitSet :: IORef Value -> Maybe Context -> Value -> IO CommitError
+commitSet ioref _ v = do
+    writeIORef ioref v
+    return NoCommitError
+
+
+testSet :: IORef Value -> Maybe Context -> Value -> IO TestError
+testSet _ _ (String _) = return NoTestError
+testSet _ _ _ = return WrongType
+
+undoSet :: IORef Value -> Maybe Context -> Value -> IO UndoError
+undoSet _ _ _ = return NoUndoError
 
 
 

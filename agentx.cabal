@@ -42,7 +42,7 @@ cabal-version:       >=1.10
 --   default-language:    Haskell2010
 
 library
-  exposed-modules:     Network.Protocol.Snmp.AgentX.MIBTree
+  exposed-modules:     Network.Protocol.Snmp.AgentX
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.6 && <4.8

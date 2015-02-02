@@ -44,7 +44,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Label as DL
 
 import Network.Protocol.Snmp (Value(..), OID)
-import Network.Protocol.Snmp.AgentX.Packet (SearchRange, RError, Context, include, startOID, endOID, SearchRange)
+import Network.Protocol.Snmp.AgentX.Packet (SearchRange, Context, include, startOID, endOID, SearchRange, CommitError, TestError, UndoError)
 
 data MIB = Object 
   { oid :: OID
@@ -84,9 +84,10 @@ data Update = Fixed
             | Read 
               { readAIO :: IO ContextedValue }
             | ReadWrite 
-              { readAIO   :: IO ContextedValue
-              , saveAIO   :: Maybe Context -> Value -> IO () 
-              , checkAIO  :: Maybe Context -> Value -> IO RError
+              { readAIO        :: IO ContextedValue
+              , commitSetAIO   :: Maybe Context -> Value -> IO CommitError 
+              , testSetAIO     :: Maybe Context -> Value -> IO TestError
+              , undoSetAIO     :: Maybe Context -> Value -> IO UndoError
               }
             
 instance Eq Update where
@@ -95,7 +96,7 @@ instance Eq Update where
 instance Show Update where
     show Fixed = "fixed"
     show (Read _) = "read-only"
-    show (ReadWrite _ _ _) = "read-write"
+    show (ReadWrite _ _ _ _) = "read-write"
 
 newtype UTree = UTree (IO [MIB])
 
@@ -327,7 +328,7 @@ isObjectType ObjectType{} = True
 isObjectType _ = False
 
 isWritable :: MIB -> Bool
-isWritable (ObjectType _ _ _ _ _ (ReadWrite _ _ _)) = True
+isWritable (ObjectType _ _ _ _ _ (ReadWrite _ _ _ _)) = True
 isWritable _ = False
 
 getOid :: Zipper -> OID

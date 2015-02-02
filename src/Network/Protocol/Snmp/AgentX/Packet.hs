@@ -23,6 +23,10 @@ module Network.Protocol.Snmp.AgentX.Packet
 , bodySizeFromHeader
 , mkPacket
 , defFlags
+, UndoError(..)
+, TestError(..)
+, CommitError(..)
+, TaggedError(..)
 )
 where
 
