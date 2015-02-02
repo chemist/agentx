@@ -330,10 +330,6 @@ isWritable :: MIB -> Bool
 isWritable (ObjectType _ _ _ _ _ (ReadWrite _ _ _)) = True
 isWritable _ = False
 
-
--- focus :: Base ()
--- focus = liftIO . print =<< getFocus <$> get
-
 getOid :: Zipper -> OID
 getOid (Root o _ _, []) = o
 getOid z = foldl fun [] (snd z) <> [getInt (fst z)]

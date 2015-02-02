@@ -6,7 +6,6 @@ import Control.Monad.State
 import Control.Monad.Reader
 import Control.Concurrent.MVar
 import qualified Data.Map.Strict as Map
-import Data.Maybe
 import qualified Data.Label as DL
 
 import Network.Protocol.Snmp.AgentX.MIBTree
@@ -14,23 +13,15 @@ import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Packet
 import Network.Protocol.Snmp.AgentX.Types
 import Network.Protocol.Snmp (Value(..))
--- import Debug.Trace
 
-makePdu :: Maybe Context -> [Either RError MIB] -> AgentT (Maybe PDU)
-makePdu mc xs = do
+makePdu :: [Either RError VarBind] -> AgentT (Maybe PDU)
+makePdu xs = do
   nowref <- sysuptime <$> ask
   now <- liftIO . readMVar $ nowref
   let (good, index, firstBad) = splitByError xs 
   case firstBad of
-       Nothing -> return . Just $ Response now NoAgentXError index $ map mibToVarBind good
-       Just err -> return . Just $ Response now err index $ map mibToVarBind good
-  where
-    mibToVarBind :: MIB -> VarBind
-    mibToVarBind y = VarBind (oid y) (unDefault $ val y)
-    unDefault :: ContextedValue -> Value
-    unDefault x = case Map.lookup (fromMaybe "" mc) x of
-                               Just v -> v
-                               Nothing -> error "unContext"
+       Nothing -> return . Just $ Response now NoAgentXError index good
+       Just err -> return . Just $ Response now err index good
 
 splitByError :: [Either RError a] -> ([a], Index, Maybe RError)
 splitByError xs = 
@@ -49,9 +40,9 @@ route :: Packet -> AgentT (Maybe Packet)
 route p = route' (DL.get pdu p) >>= return . fmap (flip (DL.set pdu) p)
   where
     route' :: PDU -> AgentT (Maybe PDU)
-    route' (Get mcontext oids) = makePdu mcontext =<< getHandler oids mcontext
-    route' (GetNext mcontext srange) = makePdu mcontext =<< getNextHandler mcontext srange 
-    route' (GetBulk mcontext nonRepeaters maxRepeaters srange) = makePdu mcontext =<< getBulkHandler mcontext nonRepeaters maxRepeaters srange 
+    route' (Get mcontext oids) = makePdu =<< getHandler oids mcontext
+    route' (GetNext mcontext srange) = makePdu =<< getNextHandler mcontext srange 
+    route' (GetBulk mcontext nonRepeaters maxRepeaters srange) = makePdu =<< getBulkHandler mcontext nonRepeaters maxRepeaters srange 
     route' (TestSet mcontext vbs) = do
         (updatesL, index, firstBad) <- splitByError <$> getUpdateList mcontext vbs
         tr <- transactions <$> ask
@@ -84,27 +75,28 @@ route p = route' (DL.get pdu p) >>= return . fmap (flip (DL.set pdu) p)
     
     route' _ = do
         liftIO $ print p
-        makePdu Nothing =<< return [Left RequestDenied]
+        makePdu =<< return [Left RequestDenied]
   
 
-getHandler :: [OID] -> Maybe Context -> AgentT [Either RError MIB]
-getHandler xs mcontext = fmap Right <$> (filterByContext mcontext <$> bridgeToBase (findMany xs))
+getHandler :: [OID] -> Maybe Context -> AgentT [Either RError VarBind]
+getHandler xs mc = fmap Right <$> (unContext mc <$> bridgeToBase (findMany xs))
 
-filterByContext :: Maybe Context -> [MIB] -> [MIB]
-filterByContext c xs = filter fun xs
-    where
-    fun x = case Map.lookup (fromMaybe "" c)  (val x) of
-                    Nothing -> False
-                    _ -> True
-            
+unContext :: Maybe Context -> [MIB] -> [VarBind]
+unContext _ [] = []
+unContext Nothing (x:xs) =
+    case Map.lookup "" (val x) of
+         Just v -> VarBind (oid x) v : unContext Nothing xs
+         Nothing -> unContext Nothing xs
+unContext (Just c) (x:xs) =
+    case (Map.lookup c (val x), Map.lookup "" (val x)) of
+         (Just v, _)                 -> VarBind (oid x) v : unContext (Just c) xs
+         (_     , Just EndOfMibView) -> VarBind (oid x) EndOfMibView : []
+         _ -> unContext (Just c) xs
 
+getNextHandler :: Maybe Context -> [SearchRange] -> AgentT [Either RError VarBind]
+getNextHandler mc xs = map Right <$> (unContext mc <$> mapM (bridgeToBase . findNext) xs)
 
-getNextHandler :: Maybe Context -> [SearchRange] -> AgentT [Either RError MIB]
-getNextHandler mcontext xs = 
-    let filtered = filterByContext mcontext <$> mapM (bridgeToBase . findNext) xs
-    in fmap Right <$> filtered
-
-getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> AgentT [Either RError MIB]
+getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> AgentT [Either RError VarBind]
 getBulkHandler = undefined
 
 getUpdate :: Maybe Context -> VarBind -> AgentT (Either RError Update)
