@@ -107,8 +107,8 @@ instance Eq UTree where
     _ == _ = True
                 
 data MIBTree = Root OID Name MIBTree
-             | Node Integer Parent Name MIBTree MIBTree (Maybe UTree)
-             | Leaf Integer Parent Name MIBTree ContextedValue Update
+             | Node Integer Name MIBTree MIBTree (Maybe UTree)
+             | Leaf Integer Name MIBTree ContextedValue Update
              | Empty
 
 singleton :: MIB -> MIBTree 
@@ -116,19 +116,19 @@ singleton m = singleton' (oid m, m)
   where
     singleton' :: (OID, MIB) -> MIBTree
     singleton' ([], _) = Empty
-    singleton' ([_], Object _ i p n u) = Node i p n Empty Empty u
-    singleton' ((x:xs), mm@(Object _ _ p n u)) = Node x  p n Empty (singleton' (xs, mm)) u
-    singleton' ([_], ObjectType _ i p n v u) = Leaf i p n Empty v u
-    singleton' ((x:xs), mm@(ObjectType _ _ p n _ _)) = Node x p n Empty (singleton' (xs, mm)) Nothing
+    singleton' ([_], Object _ i _ n u) = Node i n Empty Empty u
+    singleton' ((x:xs), mm@(Object _ _ _ n u)) = Node x n Empty (singleton' (xs, mm)) u
+    singleton' ([_], ObjectType _ i _ n v u) = Leaf i n Empty v u
+    singleton' ((x:xs), mm@(ObjectType _ _ _ n _ _)) = Node x n Empty (singleton' (xs, mm)) Nothing
 
 insert :: MIBTree -> MIBTree -> MIBTree
 insert a Empty = a
 insert Empty a = a
-insert (Node i p n next link u) x@(Node i1 _ _ next1 link1 _)
-  | i == i1 = Node i p n (next `insert` next1) (link `insert` link1) u
-  | otherwise = Node i p n (next `insert` x) link u
-insert (Node i p n next link u) x@(Leaf{}) = Node i p n (next `insert` x) link u
-insert (Leaf i p n next v u) x = Leaf i p n (next `insert` x) v u 
+insert (Node i n next link u) x@(Node i1 _ next1 link1 _)
+  | i == i1 = Node i n (next `insert` next1) (link `insert` link1) u
+  | otherwise = Node i n (next `insert` x) link u
+insert (Node i n next link u) x@(Leaf{}) = Node i n (next `insert` x) link u
+insert (Leaf i n next v u) x = Leaf i n (next `insert` x) v u 
 insert _ _ = error "bad insert usage"
    
 fromList :: [MIB] -> MIBTree
@@ -137,7 +137,7 @@ fromList y@(x:_)
     | oid x == [] = foldl1 insert . map singleton . sort . makeOid $ y
     | otherwise = dropRoot x (foldl1 insert . map singleton . sort . makeOid $ y)
     where
-      dropRoot a z@(Node _ _ n _ link _)
+      dropRoot a z@(Node  _ n _ link _)
         | n == name a = dropRoot a link
         | otherwise = Root (oid a) (name a) z
       dropRoot _ _ = error "bad dropParted"
@@ -174,8 +174,8 @@ toList (Root oi n l) = Object oi (last oi) "" n Nothing : toList' (oi, l)
 toList x = toList' ([], x)
 
 toList' :: (OID, MIBTree) -> [MIB]
-toList' (o, Node i p n next link u) = Object (o <> [i]) i p n u : toList' (o, next) <> toList' (o <> [i], link)
-toList' (o, Leaf i p n next v u) = ObjectType (o <> [i]) i p n v u : toList' (o, next)
+toList' (o, Node i n next link u) = Object (o <> [i]) i "" n u : toList' (o, next) <> toList' (o <> [i], link)
+toList' (o, Leaf i n next v u) = ObjectType (o <> [i]) i "" n v u : toList' (o, next)
 toList' (_, _) = []
 
 printTree :: MIBTree -> IO ()
@@ -183,8 +183,8 @@ printTree f = putStr $ unlines $ drawLevel f
   where
     drawLevel Empty = []
     drawLevel (Root o n link) = ("Root " <> show o <> " " <> n <> " " ) : drawSubtree Empty link
-    drawLevel (Node i _ n next link _) = ("Object " <> show i <> " " <> n <> " " ) : (drawSubtree next link)
-    drawLevel (Leaf i _ n next v _) = ("ObjectType " <> show i <> " " <> n <> " " <> show v <> " " ) : (drawSubtree next Empty)
+    drawLevel (Node i n next link _) = ("Object " <> show i <> " " <> n <> " " ) : (drawSubtree next link)
+    drawLevel (Leaf i n next v _) = ("ObjectType " <> show i <> " " <> n <> " " <> show v <> " " ) : (drawSubtree next Empty)
     
     drawSubtree next link = (shift "`- " " | " (drawLevel link)) <> drawLevel next
 
@@ -218,32 +218,32 @@ attach t (_, bs) = (t, bs)
 
 goNext :: Zipper -> Maybe Zipper 
 goNext (Empty, _) = Nothing
-goNext (Node _ _ _ Empty _ _, _) = Nothing
-goNext (Leaf _ _ _ Empty _ _, _) = Nothing
+goNext (Node _ _ Empty _ _, _) = Nothing
+goNext (Leaf _ _ Empty _ _, _) = Nothing
 goNext (Root _ _ _, _) = Nothing
-goNext (Leaf i p n next v    u, bs) = Just (next, Next (Leaf i p n Empty v u):bs)
-goNext (Node i p n next link u, bs) = Just (next, Next (Node i p n Empty link u):bs)
+goNext (Leaf i n next v    u, bs) = Just (next, Next (Leaf i n Empty v u):bs)
+goNext (Node i n next link u, bs) = Just (next, Next (Node i n Empty link u):bs)
 
 goLevel :: Zipper -> Maybe Zipper 
 goLevel (Empty, _) = Nothing
 goLevel (Leaf{}, _) = Nothing
-goLevel (Node _ _ _ _ Empty _, _) = Nothing
-goLevel (Node i p n next link u, bs) = Just (link, Level (Node i p n next Empty u):bs)
+goLevel (Node _ _ _ Empty _, _) = Nothing
+goLevel (Node i n next link u, bs) = Just (link, Level (Node i n next Empty u):bs)
 goLevel (Root o n link, bs) = Just (link, Level (Root o n Empty):bs)
 
 goBack :: Zipper -> Maybe Zipper 
 goBack (_, []) = Nothing
-goBack (t, Next (Leaf i p n Empty v u):bs) = Just (Leaf i p n t v u, bs)
-goBack (t, Next (Node i p n Empty link u):bs) = Just (Node i p n t link u, bs)
-goBack (t, Level (Node i p n next Empty u):bs) = Just (Node i p n next t u, bs)
+goBack (t, Next (Leaf i n Empty v u):bs) = Just (Leaf i n t v u, bs)
+goBack (t, Next (Node i n Empty link u):bs) = Just (Node i n t link u, bs)
+goBack (t, Level (Node i n next Empty u):bs) = Just (Node i n next t u, bs)
 goBack (t, Level (Root o n Empty):[]) = Just (Root o n t, [])
 goBack _ = Nothing
 
 goUp :: Zipper -> Maybe Zipper 
 goUp (_, []) = Nothing
-goUp (t, Next (Leaf i p n Empty v u):bs) = goUp (Leaf i p n t v u, bs)
-goUp (t, Next (Node i p n Empty link u):bs) = goUp (Node i p n t link u, bs)
-goUp (t, Level (Node i p n next Empty u):bs) = Just (Node i p n next t u, bs)
+goUp (t, Next (Leaf i n Empty v u):bs) = goUp (Leaf i n t v u, bs)
+goUp (t, Next (Node i n Empty link u):bs) = goUp (Node i n t link u, bs)
+goUp (t, Level (Node i n next Empty u):bs) = Just (Node i n next t u, bs)
 goUp (t, Level (Root o n Empty):[]) = Just (Root o n t, [])
 goUp _ = Nothing
 
@@ -256,8 +256,8 @@ getFocus z = fromTree (fst z) (getOid z)
   where
   fromTree Empty _ = undefined
   fromTree (Root o n _) _ = Object o (last o) "" n Nothing
-  fromTree (Node i p n _ _ u) o = Object o i p n u
-  fromTree (Leaf i p n _ v u) o = ObjectType o i p n v u
+  fromTree (Node i n _ _ u) o = Object o i "" n u
+  fromTree (Leaf i n _ v u) o = ObjectType o i "" n v u
 
 type Base = StateT Zipper IO
 
@@ -336,14 +336,14 @@ getOid (Root o _ _, []) = o
 getOid z = foldl fun [] (snd z) <> [getInt (fst z)]
   where
   fun xs Next{}= xs
-  fun xs (Level (Node i _ _ _ _ _)) = i:xs
-  fun xs (Level (Leaf i _ _ _ _ _)) = i:xs
+  fun xs (Level (Node i _ _ _ _)) = i:xs
+  fun xs (Level (Leaf i _ _ _ _)) = i:xs
   fun xs (Level (Root o _ _)) = o <> xs
   fun _ _ = error "bad zipper"
 
 getInt :: MIBTree -> Integer
-getInt (Node i _ _ _ _ _) = i
-getInt (Leaf i _ _ _ _ _) = i
+getInt (Node i _ _ _ _) = i
+getInt (Leaf i _ _ _ _) = i
 getInt _ = error "bad getInt"
 
 findNext :: SearchRange -> Base MIB
