@@ -49,20 +49,31 @@ runAgent tree socket'  = do
     s <- newMVar =<< getSysUptime
     i <- newEmptyMVar
     p <- newMVar minBound
-    m <- newMVar (toZipper tree)
+    reg <- newMVar (toList tree)
+    unreg <- newEmptyMVar
+    m <- newMVar (BST (toZipper tree) reg unreg)
     ts <- newMVar Map.empty
     let st = ST s p m socket' i ts
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
-    run st $ resp >-> registrator >->  output
+    -- open session 
+    run st $ resp >-> openSession >-> output
+    -- start registration fiber
+    regPid <- fiber st $ resp >-> registrator True >->  output
+    unregPid <- fiber st $ resp >-> registrator False >-> output
+    -- start server fiber
     serverPid <-  fiber st $ req >-> server
 --    serverPid <-  fiber st $ req >-> _dp "in " >-> server
+    -- start agent fiber
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
     _ <-  getLine :: IO String
-    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid] -- p2,p3,p4,p5, 
+    putMVar unreg (toList tree)
+    liftIO $ putStrLn "unregister all MIB"
+    liftIO $ threadDelay 1000000
+    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, unregPid] -- p2,p3,p4,p5, 
 
 ---------------------------------------------------------------------------
 -- Pipes eval 
@@ -110,14 +121,14 @@ server' = forever $ await >>= lift . route >>= yieldOnlyJust
         yieldOnlyJust Nothing = return ()
         yieldOnlyJust (Just resp) = yield resp
 
-registrator :: Pipe Packet Packet AgentT () 
-registrator = do
+openSession :: Pipe Packet Packet AgentT ()
+openSession = do
     openPacket <- lift open
-    -- open session
     client openPacket
-    -- register mibs
-    registerPackages <- lift register
-    mapM_ client registerPackages
+
+registrator :: Bool -> Pipe Packet Packet AgentT () 
+registrator True = mapM_ client =<< lift register
+registrator False = mapM_ client =<< lift unregister
 
 client :: Packet -> Pipe Packet Packet AgentT ()
 client p = do
@@ -142,8 +153,9 @@ _dp label = forever $ do
 register :: AgentT [Packet]
 register = do
     s <- mibs <$> ask
-    zipper' <- liftIO $ readMVar s
-    let tree = toList $ fst zipper'
+    BST _ regMVar _  <- liftIO $ readMVar s
+    tree <- liftIO $ takeMVar regMVar
+--  let tree = toList zipper'
 --     liftIO $ print $ concatMap mibToPackets $ filter isObjectType tree
     return $ concatMap mibToPackets $ filter isObjectType tree
         where
@@ -155,10 +167,25 @@ register = do
                 pduList = map (\x -> Register x minBound (toEnum 127) minBound (oid m) Nothing) context
             in map (\x -> mkPacket x minBound minBound minBound) pduList
 
+unregister :: AgentT [Packet]
+unregister = do
+    s <- mibs <$> ask
+    BST _ _ unregMVar <- liftIO $ readMVar s
+    tree <- liftIO $ takeMVar unregMVar
+    return $ concatMap mibToPackets $ filter isObjectType tree
+        where
+        mibToPackets :: MIB -> [Packet]
+        mibToPackets m =
+            let context = map contextToMContext $ Map.keys (val m)
+                contextToMContext "" = Nothing
+                contextToMContext x  = Just x
+                pduList = map (\x -> Unregister x (toEnum 127) minBound (oid m) Nothing) context
+            in map (\x -> mkPacket x minBound minBound minBound) pduList
+
 open :: AgentT Packet
 open = do
     m <- mibs <$> ask
-    base <- head . toList . fst <$> (liftIO $ readMVar m)
+    base <- head . toList . fst . zipper <$> (liftIO $ readMVar m)
     let open' = Open minBound (oid base) ("Haskell AgentX sub-aagent: " <> fromString (name base))
     return $ mkPacket open' minBound minBound minBound 
 

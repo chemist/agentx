@@ -29,7 +29,7 @@ data TransactionState = TestSetT
 data ST = ST
   { sysuptime :: MVar SysUptime
   , packetCounter :: MVar PacketID
-  , mibs :: MVar Zipper 
+  , mibs :: MVar BaseST 
   , sock :: Socket
   , sessions :: MVar SessionID
   , transactions :: MVar (Map TransactionID Transaction)

@@ -95,7 +95,10 @@ data TaggedError = forall a. (Show a, Eq a, Tag a Word16) => Tagged a
 
 instance Tag TaggedError Word16 where
     tag (Tagged x) = tag x
-    unTag = undefined
+    unTag x 
+      | x == 0 = Tagged NoAgentXError
+      | x > 0 && x <= 18 = Tagged (unTag x :: TestError)
+      | otherwise = Tagged (unTag x :: RError)
 
 instance Eq TaggedError where
     x == y = (tag x :: Word16) == (tag y :: Word16)
@@ -107,7 +110,7 @@ instance Show TaggedError where
 data PDU = Open Timeout OID Description -- 6.2.1
          | Close  Reason                 -- 6.2.2
          | Register MContext Timeout Priority RangeSubid OID UpperBound -- 6.2.3
-         | Unregister MContext Word8 Word8 OID UpperBound -- 6.2.4
+         | Unregister MContext Priority RangeSubid OID UpperBound -- 6.2.4
          | Get MContext [OID] -- 6.2.5
          | GetNext MContext [SearchRange] -- 6.2.6
          | GetBulk MContext NonRepeaters MaxRepeaters [SearchRange] -- 6.2.7

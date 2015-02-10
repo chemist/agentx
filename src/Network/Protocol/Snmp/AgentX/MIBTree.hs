@@ -11,7 +11,6 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , mkObjectType
 , toList
 , fromList
-, printTree
 , Update(..)
 , UTree(..)
 , MIBTree
@@ -29,6 +28,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree
 , ContextedValue
 , defaultContext
 , isObjectType
+, BaseST(..)
 )
 where
 
@@ -36,8 +36,9 @@ import Data.Typeable (Typeable)
 import Data.Monoid ((<>))
 import Data.Maybe (fromJust, isJust, fromMaybe)
 import Data.List (stripPrefix, sort)
-import Control.Monad.State.Strict (StateT, get, put, liftIO, modify)
+import Control.Monad.State.Strict (StateT, get, put, liftIO)
 import Control.Monad
+import Control.Concurrent.MVar
 import Control.Applicative ((<$>), (<*>))
 import Control.Exception (Exception, throw)
 import qualified Data.Map.Strict as Map
@@ -110,6 +111,7 @@ data MIBTree = Root OID Name MIBTree
              | Node Integer Name MIBTree MIBTree (Maybe UTree)
              | Leaf Integer Name MIBTree ContextedValue Update
              | Empty
+             deriving (Eq)
 
 singleton :: MIB -> MIBTree 
 singleton m = singleton' (oid m, m)
@@ -178,17 +180,20 @@ toList' (o, Node i n next link u) = Object (o <> [i]) i "" n u : toList' (o, nex
 toList' (o, Leaf i n next v u) = ObjectType (o <> [i]) i "" n v u : toList' (o, next)
 toList' (_, _) = []
 
-printTree :: MIBTree -> IO ()
-printTree f = putStr $ unlines $ drawLevel f
-  where
-    drawLevel Empty = []
-    drawLevel (Root o n link) = ("Root " <> show o <> " " <> n <> " " ) : drawSubtree Empty link
-    drawLevel (Node i n next link _) = ("Object " <> show i <> " " <> n <> " " ) : (drawSubtree next link)
-    drawLevel (Leaf i n next v _) = ("ObjectType " <> show i <> " " <> n <> " " <> show v <> " " ) : (drawSubtree next Empty)
+instance Show MIBTree where
+    show f = unlines $ drawLevel f
+      where
+        drawLevel Empty = []
+        drawLevel (Root o n link) = ("Root " <> show o <> " " <> n <> " " ) : drawSubtree Empty link
+        drawLevel (Node i n next link _) = ("Object " <> show i <> " " <> n <> " " ) : (drawSubtree next link)
+        drawLevel (Leaf i n next v _) = ("ObjectType " <> show i <> " " <> n <> " " <> show v <> " " ) : (drawSubtree next Empty)
+        
+        drawSubtree next link = (shift "`- " " | " (drawLevel link)) <> drawLevel next
     
-    drawSubtree next link = (shift "`- " " | " (drawLevel link)) <> drawLevel next
+        shift first rest = zipWith (++) (first : repeat rest)
 
-    shift first rest = zipWith (++) (first : repeat rest)
+instance Show Zipper where
+    show (f,_) = show f
 
 mkModule :: OID -> Parent -> Name -> MIB
 mkModule [] _ _ = error "oid cant be empty"
@@ -252,14 +257,33 @@ top (t,[]) = (t,[])
 top z = top (fromJust $ goBack z)
 
 getFocus :: Zipper -> MIB
-getFocus z = fromTree (fst z) (getOid z)
+getFocus z@(x, _) = fromTree x (getOid z)
   where
-  fromTree Empty _ = undefined
+  fromTree Empty _ = error "getFocus"
   fromTree (Root o n _) _ = Object o (last o) "" n Nothing
   fromTree (Node i n _ _ u) o = Object o i "" n u
   fromTree (Leaf i n _ v u) o = ObjectType o i "" n v u
 
-type Base = StateT Zipper IO
+type Base = StateT BaseST IO
+
+data BaseST = BST 
+  { zipper :: Zipper 
+  , toRegister :: MVar [MIB] 
+  , toUnregister :: MVar [MIB]
+  }
+
+getZip :: Base Zipper
+getZip = zipper <$> get
+
+putZip :: Zipper -> Base ()
+putZip z = do
+    s <- get
+    put $ s { zipper = z }
+
+modifyZip :: (Zipper -> Zipper) -> Base ()
+modifyZip f = do
+    s <- get
+    put $ s { zipper = f (zipper s) }
 
 update :: MIB -> Base MIB
 update m = case upd m of
@@ -269,11 +293,11 @@ update m = case upd m of
 
 updateTree :: Base ()
 updateTree = do
-    c <- getFocus <$> get
+    c <- getFocus <$> getZip
     case isDynamic c of
        Just (UTree fun) -> do
            n <- liftIO fun 
-           modify $ attach $ fromList n
+           modifyZip $ attach $ fromList n
        Nothing -> return ()
     where
     isDynamic (Object _ _ _ _ x) = x
@@ -285,34 +309,34 @@ setValue _ _ = throw CantReadValue
 
 goClosest :: OID -> Base ()
 goClosest xs = do
-    modify top
-    o <- getFocus <$> get
-    modify $ fromJust . goLevel
+    modifyZip top
+    o <- getFocus <$> getZip
+    modifyZip $ fromJust . goLevel
     walk' $ fromMaybe [] (stripPrefix (oid o) xs)
     where
         walk' :: OID -> Base ()
         walk' [] = return ()
         walk' (x:ys) = do
-            c <- int . getFocus <$> get
+            c <- int . getFocus <$> getZip
             l <- hasLevel
             n <- hasNext
             case (x == c, l, n) of
                  (True, True, _) -> do
                      updateTree
-                     unless (ys == []) $ modify $ fromJust . goLevel
+                     unless (ys == []) $ modifyZip $ fromJust . goLevel
                      walk' ys
                  (False, _, True) -> do
-                     modify $ fromJust . goNext
+                     modifyZip $ fromJust . goNext
                      walk' (x:ys)
                  _ -> return ()
 
 findOne :: OID -> Base MIB
 findOne xs = do
     goClosest xs
-    o <- getOid <$> get
+    o <- getOid <$> getZip
     t <- isFocusObjectType
     case (o == xs, t) of
-         (True, True) -> update =<< getFocus <$> get
+         (True, True) -> update =<< getFocus <$> getZip
          (True, False) -> return $ ObjectType o (last o) "" "" (defaultContext NoSuchObject) Fixed
          _ -> return $ ObjectType xs (last xs) "" "" (defaultContext NoSuchInstance) Fixed
 
@@ -321,7 +345,7 @@ findMany [] = return []
 findMany (x:xs) = (:) <$> findOne x <*> findMany xs
 
 isFocusObjectType :: Base Bool
-isFocusObjectType = isObjectType . getFocus <$> get
+isFocusObjectType = isObjectType . getFocus <$> getZip
 
 isObjectType :: MIB -> Bool
 isObjectType ObjectType{} = True
@@ -333,7 +357,7 @@ isWritable _ = False
 
 getOid :: Zipper -> OID
 getOid (Root o _ _, []) = o
-getOid z = foldl fun [] (snd z) <> [getInt (fst z)]
+getOid (t, z) = foldl fun [] z <> [getInt t]
   where
   fun xs Next{}= xs
   fun xs (Level (Node i _ _ _ _)) = i:xs
@@ -350,7 +374,7 @@ findNext :: SearchRange -> Base MIB
 findNext s 
   | DL.get include s = do
     goClosest (DL.get startOID s)
-    o <- getFocus <$> get
+    o <- getFocus <$> getZip
     t <- isFocusObjectType
     if oid o == (DL.get startOID s) && t
        then inRange s <$> update o
@@ -361,15 +385,15 @@ findNext s
     n <- hasNext
     case (l, n) of
          (True, _) -> do
-             modify $ fromJust . goLevel
+             modifyZip $ fromJust . goLevel
              m <- findClosestObject' False (DL.get startOID s)
              inRange s <$> update m
          (False, True) -> do
-             modify $ fromJust . goNext
+             modifyZip $ fromJust . goNext
              m <- findClosestObject' False (DL.get startOID s)
              inRange s <$> update m
          (False, False) -> do
-             modify $ fromJust . goUp
+             modifyZip $ fromJust . goUp
              m <- findClosestObject' True (DL.get startOID s)
              inRange s <$> update m
 
@@ -385,22 +409,22 @@ findClosestObject' back oid' = do
     l <- (if back then not else id) <$> hasLevel
     n <- hasNext
     case (t, l, n) of
-         (True, _, _) -> getFocus <$> get
+         (True, _, _) -> getFocus <$> getZip
          (False, True, _) -> do
-             modify (fromJust . goLevel)
+             modifyZip (fromJust . goLevel)
              findClosestObject' False oid'
          (False, False, True) -> do
-             modify (fromJust . goNext) 
+             modifyZip (fromJust . goNext) 
              findClosestObject' False oid'
          (False, False, False) -> do 
-             st <- get
+             st <- getZip
              case (goUp st) of
-                  Just ust -> put ust >> findClosestObject' True oid'
+                  Just ust -> putZip ust >> findClosestObject' True oid'
                   Nothing -> return $ ObjectType oid' 0 "" "" (defaultContext EndOfMibView) Fixed
 
-hasLevel :: StateT Zipper IO Bool
-hasLevel = isJust . goLevel <$> get
+hasLevel :: Base Bool
+hasLevel = isJust . goLevel . zipper <$> get
 
-hasNext :: StateT Zipper IO Bool
-hasNext = isJust . goNext <$> get
+hasNext :: Base Bool
+hasNext = isJust . goNext . zipper <$> get
 
