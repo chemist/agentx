@@ -52,7 +52,7 @@ data MIB = Object
   , int :: Integer
   , parent :: Parent 
   , name  :: Name 
-  , _updu :: (Maybe UTree)
+  , _updu :: UTree
   }      | ObjectType 
   { oid :: OID
   , int :: Integer
@@ -99,7 +99,8 @@ instance Show Update where
     show (Read _) = "read-only"
     show (ReadWrite _ _ _ _) = "read-write"
 
-newtype UTree = UTree (IO [MIB])
+data UTree = DynTree (IO [MIB])
+           | EmptyTree
 
 instance Show UTree where
     show _ = "dynamic"
@@ -108,7 +109,7 @@ instance Eq UTree where
     _ == _ = True
                 
 data MIBTree = Root OID Name MIBTree
-             | Node Integer Name MIBTree MIBTree (Maybe UTree)
+             | Node Integer Name MIBTree MIBTree UTree
              | Leaf Integer Name MIBTree ContextedValue Update
              | Empty
              deriving (Eq)
@@ -121,7 +122,7 @@ singleton m = singleton' (oid m, m)
     singleton' ([_], Object _ i _ n u) = Node i n Empty Empty u
     singleton' ((x:xs), mm@(Object _ _ _ n u)) = Node x n Empty (singleton' (xs, mm)) u
     singleton' ([_], ObjectType _ i _ n v u) = Leaf i n Empty v u
-    singleton' ((x:xs), mm@(ObjectType _ _ _ n _ _)) = Node x n Empty (singleton' (xs, mm)) Nothing
+    singleton' ((x:xs), mm@(ObjectType _ _ _ n _ _)) = Node x n Empty (singleton' (xs, mm)) EmptyTree
 
 insert :: MIBTree -> MIBTree -> MIBTree
 insert a Empty = a
@@ -172,7 +173,7 @@ makeOid (Object o i p n u : xs)
     
 toList :: MIBTree -> [MIB]
 toList Empty  = []
-toList (Root oi n l) = Object oi (last oi) "" n Nothing : toList' (oi, l)
+toList (Root oi n l) = Object oi (last oi) "" n EmptyTree : toList' (oi, l)
 toList x = toList' ([], x)
 
 toList' :: (OID, MIBTree) -> [MIB]
@@ -197,9 +198,9 @@ instance Show Zipper where
 
 mkModule :: OID -> Parent -> Name -> MIB
 mkModule [] _ _ = error "oid cant be empty"
-mkModule o p n  = Object o (last o) p n Nothing
+mkModule o p n  = Object o (last o) p n EmptyTree
 
-mkObject :: Integer -> Parent -> Name -> Maybe UTree -> MIB
+mkObject :: Integer -> Parent -> Name -> UTree -> MIB
 mkObject = Object []
 
 mkObjectType :: Integer -> Parent -> Name -> ContextedValue -> Update -> MIB
@@ -260,7 +261,7 @@ getFocus :: Zipper -> MIB
 getFocus z@(x, _) = fromTree x (getOid z)
   where
   fromTree Empty _ = error "getFocus"
-  fromTree (Root o n _) _ = Object o (last o) "" n Nothing
+  fromTree (Root o n _) _ = Object o (last o) "" n EmptyTree
   fromTree (Node i n _ _ u) o = Object o i "" n u
   fromTree (Leaf i n _ v u) o = ObjectType o i "" n v u
 
@@ -294,14 +295,15 @@ update m = case upd m of
 updateTree :: Base ()
 updateTree = do
     c <- getFocus <$> getZip
+    liftIO $ print c
     case isDynamic c of
-       Just (UTree fun) -> do
+       DynTree fun -> do
            n <- liftIO fun 
            modifyZip $ attach $ fromList n
-       Nothing -> return ()
+       EmptyTree -> return ()
     where
     isDynamic (Object _ _ _ _ x) = x
-    isDynamic _ = Nothing
+    isDynamic _ = EmptyTree
 
 setValue :: MIB -> ContextedValue -> MIB
 setValue (ObjectType o i p n _ u) v = ObjectType o i p n v u

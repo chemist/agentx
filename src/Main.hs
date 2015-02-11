@@ -17,13 +17,15 @@ fixmon :: IO MIBTree
 fixmon = do
     interfaces' <- interfaces
     agentName <- newIORef $ String "fixmon snmp agent"
+    nodes <- newIORef $ Integer 1
+    dynT <- dynamicTree nodes
     return $ fromList $ 
       [ mkModule [1,3,6,1,4,1,44729] "enterprise" "Fixmon"
-      , mkObject 0 "Fixmon" "about" Nothing
+      , mkObject 0 "Fixmon" "about" EmptyTree
       , mkObjectType 0 "about" "name" (defaultContext (String "fixmon snmp agent")) (updateName agentName) 
       , mkObjectType 1 "about" "version" (defaultContext (Integer 1)) Fixed
       , mkObjectType 2 "about" "contexted" contextedValue Fixed
-      ] <> interfaces' <> time
+      ] <> interfaces' <> dynT <> time 
 
 contextedValue :: ContextedValue
 contextedValue = Map.fromList [ ("context1", String "context1")
@@ -47,14 +49,31 @@ testSet :: IORef Value -> Maybe Context -> Value -> IO TestError
 testSet _ _ (String _) = return NoTestError
 testSet _ _ _ = return WrongType
 
+testSetInt :: IORef Value -> Maybe Context -> Value -> IO TestError
+testSetInt _ _ (Integer _) = return NoTestError
+testSetInt _ _ _ = return WrongType
+
 undoSet :: IORef Value -> Maybe Context -> Value -> IO UndoError
 undoSet _ _ _ = return NoUndoError
+
+dynamicTree :: IORef Value -> IO [MIB]
+dynamicTree nodes = do
+    Integer i <- readIORef nodes
+    return $  mkObject 1 "Fixmon" "dynamic" (DynTree (dynamicTree nodes )) : map addNode [0 .. fromIntegral i]
+    where
+    addNode :: Integer -> MIB
+    addNode 0 = mkObjectType 0 "dynamic" "counter" (defaultContext (Integer 0)) updateCounter
+    addNode i = mkObjectType i "dynamic" (show i) (defaultContext (Integer $ fromIntegral i)) Fixed
+    updateCounter = ReadWrite (defaultContext <$> readIORef nodes)
+                              (commitSet nodes)
+                              (testSetInt nodes)
+                              (undoSet nodes)
 
 
 
 time :: [MIB]
 time = 
-    [ mkObject 1 "Fixmon" "time" Nothing
+    [ mkObject 3 "Fixmon" "time" EmptyTree
     , mkObjectType 0 "time" "description" (defaultContext (String "sysUptime")) Fixed
     , mkObjectType 1 "time" "now"  (defaultContext (TimeTicks 0)) (Read fun)
     ]
@@ -72,12 +91,12 @@ interfaces = do
         ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" (defaultContext . String . pack . show . NI.ipv6 $ o) Fixed
         macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" (defaultContext . String . pack . show . NI.mac $ o) Fixed
     return $ 
-        mkObject 2 "Fixmon" "interfaces" (Just $ UTree interfaces) :
-          (mkObject 0 "interfaces" "indexes" Nothing : indexes) <>
-          (mkObject 1 "interfaces" "names"   Nothing : names )  <>
-          (mkObject 2 "interfaces" "ipv4s"   Nothing : ipv4s )  <>
-          (mkObject 3 "interfaces" "ipv6s"   Nothing : ipv6s )  <>
-          (mkObject 4 "interfaces" "macs"    Nothing : macs )
+        mkObject 2 "Fixmon" "interfaces" (DynTree interfaces) :
+          (mkObject 0 "interfaces" "indexes" EmptyTree : indexes) <>
+          (mkObject 1 "interfaces" "names"   EmptyTree : names )  <>
+          (mkObject 2 "interfaces" "ipv4s"   EmptyTree : ipv4s )  <>
+          (mkObject 3 "interfaces" "ipv6s"   EmptyTree : ipv6s )  <>
+          (mkObject 4 "interfaces" "macs"    EmptyTree : macs )
 
 main :: IO ()
 main = agent "/var/agentx/master" =<< fixmon

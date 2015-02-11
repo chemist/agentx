@@ -155,6 +155,7 @@ register = do
     s <- mibs <$> ask
     BST _ regMVar _  <- liftIO $ readMVar s
     tree <- liftIO $ takeMVar regMVar
+--    liftIO $ forM_ (sort tree) print 
 --  let tree = toList zipper'
 --     liftIO $ print $ concatMap mibToPackets $ filter isObjectType tree
     return $ concatMap mibToPackets $ filter isObjectType tree
