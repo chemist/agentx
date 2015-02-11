@@ -3,14 +3,22 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE TemplateHaskell, TypeOperators #-}
 module Network.Protocol.Snmp.AgentX.MTree where
 
-import Control.Monad.State.Strict
+import Control.Monad.State.Strict hiding (gets, modify)
 import Control.Concurrent.MVar
 import Control.Applicative hiding (empty)
+import Data.Label (mkLabel)
+import Data.Label.Monadic (gets, puts, modify)
+-- import qualified Data.Label as DL
+-- import qualified Data.Label.Monadic as DLM
+-- import Control.Category ((.))
+import Prelude hiding ((.))
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError)
 
 data MIB = Object OID Update
@@ -34,8 +42,7 @@ data Point = Root OID Integer
 
 type CValue = Map Context Value
 
-data PVal = Fixed CValue
-          | Read 
+data PVal = Read 
             { readAIO        :: forall m . (Monad m, MonadIO m) => m CValue }
           | ReadWrite 
             { readAIO        :: forall m . (Monad m, MonadIO m) => m CValue
@@ -44,69 +51,101 @@ data PVal = Fixed CValue
             , undoSetAIO     :: forall m . (Monad m, MonadIO m) => Maybe Context -> Value -> m UndoError
             }
 
-data MTree a = forall m . (Monad m, MonadIO m) => Node a (MTree a) (m (MTree a))
+p :: (Monad m, MonadIO m) => m CValue
+p = do
+    liftIO $ print "io"
+    return Map.empty
+
+pv :: PVal
+pv = Read p
+
+
+data MTree a = Node a (MTree a) (IO (MTree a))
              | Leaf a (MTree a) 
              | Empty
 
 
 data Move a = Next (MTree a) 
-            | Level (MTree a)
+            | Level (IO (MTree a))
 
 type Moving a = [Move a]
 
 data Zipper = Zipper
-  { zipper        :: MTree Point
-  , moving        :: Moving Point
-  , toRegister    :: MVar [MIB]
-  , toUnRegister  :: MVar [MIB]
+  { _zipper        :: MTree Point
+  , _moving        :: Moving Point
+  , _oid           :: OID
+  , _reg           :: MVar [MIB]
+  , _unreg         :: MVar [MIB]
   }
+
+mkLabel ''Zipper
 
 type Base = StateT Zipper 
 
 empty :: MVar [MIB] -> MVar [MIB] -> Zipper 
-empty = Zipper Empty [] 
+empty = Zipper Empty [] []
 
-insert :: MIB -> Base IO ()
+insert :: (Monad m, MonadIO m, Functor m) => MIB -> Base m ()
 insert _mib = do
     undefined
 
-top :: Base IO ()
+top :: (Monad m, MonadIO m, Functor m) => Base m Bool
 top = undefined
 
-goUp :: Base IO ()
+goUp :: (Monad m, MonadIO m, Functor m) => Base m Bool
 goUp = undefined
 
-goNext :: Base IO ()
-goNext = undefined
+goNext :: (Monad m, MonadIO m, Functor m) => Base m Bool
+goNext = do
+   z <-  gets zipper
+   case z of
+        Empty -> return False
+        Leaf _ Empty -> return False
+        Node _ Empty _ -> return False
+        Leaf a next -> do
+            puts zipper next
+            addMove (Next $ Leaf a Empty)
+            return True
+        Node a next level -> do
+            puts zipper next
+            addMove (Next $ Node a Empty level)
+            return True
 
-goLevel :: Base IO ()
-goLevel = undefined
+addMove :: (Monad m, MonadIO m, Functor m) => Move Point -> Base m ()
+addMove x = modify moving $ \xs -> x : xs
 
-goBack :: Base IO ()
+goLevel :: (Monad m, MonadIO m, Functor m) => Base m Bool
+goLevel = do
+    z <- gets zipper
+    case z of
+         Empty -> return False
+         Leaf{} -> return False
+         Node _ _next mlink -> do
+             link <-  liftIO $ mlink
+             case link of
+                  Empty -> return False
+                  _ -> do
+                      puts zipper link
+                      addMove $ Level mlink
+                      return True
+
+
+
+
+goBack :: (Monad m, MonadIO m, Functor m) => Base m Bool
 goBack = undefined
 
-focus :: Base IO (OID, Point)
+focus :: (Monad m, MonadIO m, Functor m) => Base m (OID, Point)
 focus = undefined
 
-isEmpty :: Base IO Bool
-isEmpty = isEmpty' <$> getz
+isEmpty :: (Monad m, MonadIO m, Functor m) => Base m Bool
+isEmpty = isEmpty' <$> gets zipper
   where
   isEmpty' :: MTree Point -> Bool 
   isEmpty' Empty = True
   isEmpty' _     = False
 
-isTop :: Base IO Bool
-isTop = null <$> (getz :: Base IO (Moving Point))
+isTop :: (Monad m, MonadIO m, Functor m) => Base m Bool
+isTop = null <$> gets moving
 
-class STZip a where
-    getz :: Base IO a
-    setz :: a -> Base IO ()
-
-instance STZip (MTree Point) where
-    getz = zipper <$> get
-    setz x = modify $ \st -> st { zipper = x }
-
-instance STZip (Moving Point) where
-    getz = moving <$> get
-    setz x = modify $ \st -> st { moving = x }
 
