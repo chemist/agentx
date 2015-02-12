@@ -4,6 +4,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree.Operations where
 import Control.Monad.IO.Class (MonadIO)
 -- import Control.Monad.Trans.Class (lift)
 -- import Network.Protocol.Snmp (OID)
+import Network.Protocol.Snmp.AgentX.Packet (Context)
 import Network.Protocol.Snmp.AgentX.MIBTree.Types (ZipperM, Zipper)
 import qualified Network.Protocol.Snmp.AgentX.MIBTree.Types as Z
 import Data.Label.Monadic (modify, gets, puts)
@@ -36,7 +37,7 @@ goUp :: (Monad m, MonadIO m, Functor m) => ZipperM m a ()
 goUp = move Z.goUp
 
 
-cursor :: (Monad m, MonadIO m, Functor m) => ZipperM m a (Maybe Integer)
+cursor :: (Monad m, MonadIO m, Functor m) => ZipperM m a (Maybe (Integer, Maybe Context))
 cursor = Z.cursor <$> gets Z.zipper 
 {--
 focus :: (Monad m, MonadIO m, Functor m, Show a) => ZipperM m a a
