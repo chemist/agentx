@@ -2,6 +2,44 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
+import Network.Protocol.Snmp.AgentX.MIBTree.Types 
+import Network.Protocol.Snmp.AgentX.MIBTree.Operations  
+import qualified Data.Map.Strict as Map
+import Control.Concurrent.MVar
+import Control.Monad.State.Strict
+
+main :: IO ()
+main = do
+    m <- newEmptyMVar
+    flip evalStateT (empty m m) $ do
+        insert root
+        insert first
+        insert second
+        top
+        top
+        liftIO $ putStrLn "top "
+        void focus
+        return ()
+
+root :: MIB IO
+root = mkStaticObject [1,2,3,4]
+
+first :: MIB IO
+first = mkStaticObject [1,2,3,4,0]
+
+second :: MIB IO
+second = mkStaticObject [1,2,3,4,1]
+
+c :: CValue
+c = Map.empty
+
+pv :: PVal IO
+pv = Read $ do
+    liftIO $ putStrLn "helo"
+    return c
+
+
+{--
 import Network.Protocol.Snmp.AgentX
 import Network.Info
 import qualified Network.Info as NI
@@ -101,3 +139,4 @@ interfaces = do
 main :: IO ()
 main = agent "/var/agentx/master" =<< fixmon
 
+--}
