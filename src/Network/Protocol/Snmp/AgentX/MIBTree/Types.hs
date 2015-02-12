@@ -1,11 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Network.Protocol.Snmp.AgentX.MIBTree.Types where
 
@@ -15,11 +8,8 @@ import Data.Maybe (fromJust)
 import Data.Monoid ((<>))
 import Data.Label
 
-import Data.Map.Strict (Map)
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError)
-
-type CValue = Map Context Value
 
 data PVal m = Read 
             { readAIO        :: m Value }
