@@ -359,7 +359,7 @@ isWritable _ = False
 
 getOid :: Zipper -> OID
 getOid (Root o _ _, []) = o
-getOid (t, z) = foldl fun [] z <> [getInt t]
+getOid (t, z) = foldl fun [getInt t] z 
   where
   fun xs Next{}= xs
   fun xs (Level (Node i _ _ _ _)) = i:xs
