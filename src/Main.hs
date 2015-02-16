@@ -2,41 +2,70 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
+import Network.Protocol.Snmp.AgentX (Value(..))
 import Network.Protocol.Snmp.AgentX.MIBTree.Types 
-import Network.Protocol.Snmp.AgentX.MIBTree.Operations  
-import qualified Data.Map.Strict as Map
-import Control.Concurrent.MVar
-import Control.Monad.State.Strict
+import Network.Info
+import qualified Network.Info as NI
+import Data.ByteString.Char8 (pack)
+import Data.Monoid ((<>))
+-- import Network.Protocol.Snmp.AgentX.MIBTree.Operations  
+-- import qualified Data.Map.Strict as Map
+-- import Control.Concurrent.MVar
+-- import Control.Monad.State.Strict
+
+pv1 :: PVal IO
+pv1 = Read (return (String "hello"))
+
+pv2 :: PVal IO
+pv2 = Read (return (Integer 1))
+
+subTree :: Update IO (PVal IO)
+subTree = Update (return ls)
+  where
+    ls :: [MIB IO (PVal IO)]
+    ls =
+        [ mkObject 3 "dyn" "tree" Nothing
+        , mkObjectType 0 "tree" "about" Nothing pv1
+        , mkObjectType 1 "tree" "name" Nothing pv1
+        ]
+
+interfaces :: Update IO (PVal IO) 
+interfaces = Update ifaces
+    where 
+    ifaces = do
+        nx <- getNetworkInterfaces
+        let xs = zip [0 .. fromIntegral $ length nx - 1] nx
+            indexes, names, ipv4s, ipv6s, macs :: [MIB IO (PVal IO)]
+            indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" Nothing (readOnly . Integer . fromIntegral $ i) 
+            names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" Nothing (readOnly . String . pack . NI.name $ o) 
+            ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" Nothing (readOnly . String . pack . show . NI.ipv4 $ o) 
+            ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" Nothing (readOnly . String . pack . show . NI.ipv6 $ o) 
+            macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" Nothing (readOnly . String . pack . show . NI.mac $ o) 
+        return $ 
+            mkObject 4 "net" "interfaces" Nothing :
+              (mkObject 0 "interfaces" "indexes" Nothing : indexes) <>
+              (mkObject 1 "interfaces" "names"   Nothing : names)   <>
+              (mkObject 2 "interfaces" "ipv4s"   Nothing : ipv4s)   <>
+              (mkObject 3 "interfaces" "ipv6s"   Nothing : ipv6s)   <>
+              (mkObject 4 "interfaces" "macs"    (Just interfaces) : macs) 
+
+simpleTree :: [MIB IO (PVal IO)]
+simpleTree = 
+      [ mkObject 0 "Fixmon" "about" Nothing
+      , mkObjectType 0 "about" "name" Nothing pv1 
+      , mkObjectType 1 "about" "version" Nothing pv1
+      , mkObjectType 2 "about" "contexted" Nothing pv2
+      , mkObject 1 "Fixmon" "dyn" Nothing
+      , mkObjectType 0 "dyn" "name" Nothing pv1 
+      , mkObjectType 1 "dyn" "version" Nothing pv1
+      , mkObjectType 2 "dyn" "contexted" Nothing pv2
+      , mkObject 3 "dyn" "tree" (Just subTree)
+      , mkObject 4 "dyn" "net" (Just interfaces)
+      ]
 
 main :: IO ()
-main = do
-    m <- newEmptyMVar
-    flip evalStateT (empty m m) $ do
-        insert root
-        insert first
-        insert second
-        top
-        top
-        liftIO $ putStrLn "top "
-        void focus
-        return ()
+main = undefined
 
-root :: MIB IO
-root = mkStaticObject [1,2,3,4]
-
-first :: MIB IO
-first = mkStaticObject [1,2,3,4,0]
-
-second :: MIB IO
-second = mkStaticObject [1,2,3,4,1]
-
-c :: CValue
-c = Map.empty
-
-pv :: PVal IO
-pv = Read $ do
-    liftIO $ putStrLn "helo"
-    return c
 
 
 {--

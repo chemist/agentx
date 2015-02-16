@@ -1,24 +1,109 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE KindSignatures #-}
 module Network.Protocol.Snmp.AgentX.MIBTree.Types where
 
 import Control.Monad.State.Strict hiding (gets, modify)
 -- import Control.Concurrent.MVar
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, catMaybes)
+import Data.Map.Strict (Map, fromList)
 import Data.Monoid ((<>))
 import Data.Label
 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError)
 
+type Parent = String
+type Name   = String
+
+data MIB m a = Object
+    { oi :: OID
+    , int :: Integer
+    , parent :: Parent
+    , name  :: Name
+    , update :: Maybe (Update m a)
+    }      | ObjectType
+    { oi :: OID
+    , int :: Integer
+    , parent :: Parent
+    , name :: Name
+    , context :: Maybe Context
+    , val :: a
+    }
+
+deriving instance Show a => Show (MIB m a)
+
+mkObject :: (Monad m, MonadIO m) => Integer -> Parent -> Name -> Maybe (Update m a) -> MIB m a
+mkObject = Object [] 
+
+mkObjectType :: Integer -> Parent -> Name -> Maybe Context -> a -> MIB m a
+mkObjectType = ObjectType []
+
+prepareOid :: [MIB m a] -> [MIB m a]
+prepareOid [] = []
+prepareOid (ObjectType{} : _) = error "makeOid: first record cant be ObjectType"
+prepareOid (Object o i p n u : xs) 
+  | o == [] = Object [i] i p n u :  mkOid' [(p, []), (n, [i])] xs
+  | otherwise = Object o i p n u : mkOid' [(p, []), (n, o)] xs
+  where
+    mkOid' :: [(Parent, OID)] -> [MIB m a] -> [MIB m a]
+    mkOid' _ [] = []
+    mkOid' base (y:ys) =
+        let Just prev = lookup (parent y) base
+            newbase = (name y, prev <> [int y]) : base
+        in addOid prev y : mkOid' newbase ys
+    addOid :: OID -> MIB m a -> MIB m a
+    addOid o' (Object _ i' p' n' u') = Object (o' <> [i']) i' p' n' u'
+    addOid o' (ObjectType _ i' p' n' v' u') = ObjectType (o' <> [i']) i' p' n' v' u'
+
+type MOU m a = Maybe (OID, Update m a)
+type OU m a = Map OID (Update m a)
+ 
+singleton :: (Monad m, MonadIO m) => MIB m a -> (MTree a, MOU m a)
+singleton m = singleton' (oi m, oi m,  m)
+  where
+    singleton' :: (OID, OID, MIB m a) -> (MTree a, MOU m a)
+    singleton' ([], _, _) = (Empty, Nothing)
+    singleton' ([_], _, Object _ i _ _ Nothing) = (Node i Empty Empty, Nothing )
+    singleton' ([_], o, Object _ i _ _ (Just u)) = (Node i Empty Empty, Just (o, u))
+    singleton' ([_], _, ObjectType _ i _ _ c v) = (Leaf i c v Empty, Nothing)
+    singleton' ((i:xs), o, obj@(Object _ _ _ _ Nothing)) = (Node i Empty (fst $ singleton' (xs, o, obj)), Nothing)
+    singleton' ((i:xs), o, obj@(Object _ _ _ _ (Just u))) = (Node i Empty (fst $ singleton' (xs, o, obj)), Just (o, u))
+    singleton' ((i:xs), o, obj@(ObjectType{})) = (Node i Empty (fst $ singleton' (xs, o, obj)), Nothing)
+
+buildTree :: (Monad m, MonadIO m) => [MIB m a] -> (MTree a, OU m a)
+buildTree xs = 
+  let mib = map singleton $ prepareOid xs
+  in (foldl1 insert . map fst $ mib, fromList $ catMaybes $ map snd mib)
+
+insert :: MTree a -> MTree a -> MTree a
+insert a Empty = a
+insert Empty a = a
+insert (Node i next link) x@(Node i1 next1 link1)
+   | i == i1 = Node i (next `insert` next1) (link `insert` link1) 
+   | otherwise = Node i (next `insert` x) link 
+insert (Node i next link) x@(Leaf{}) = Node i (next `insert` x) link 
+insert (Leaf i c v next) x = Leaf i c v (next `insert` x) 
+
+data Update m a = Update { unUpdate :: m [MIB m a]}
+
+instance Show a => Show (Update m a) where
+    show _ = "Update Subtree Fun"
+
 data PVal m = Read 
-            { readAIO        :: m Value }
+            { readAIO        :: m Value 
+            }
           | ReadWrite 
             { readAIO        :: m Value
             , commitSetAIO   :: Value -> m CommitError
             , testSetAIO     :: Value -> m TestError
             , undoSetAIO     :: Value -> m UndoError
             }
+
+readOnly :: (Monad m, MonadIO m) => Value -> PVal m
+readOnly v = Read $ return v
 
 instance (Monad m, MonadIO m) => Show (PVal m) where
     show Read{} = "Read Value"
@@ -70,18 +155,28 @@ type Moving a = [Move a]
 
 type Zipper a = (MTree a, Moving a)
 
-data Storage a = Storage
+data Storage m a = Storage
   { _zipper        :: Zipper a
+  , _ou            :: OU m a
   , _oid           :: OID
   , _moduleOID     :: OID
-  }
+  } 
+
+instance Show a => Show (Storage m a) where
+    show (Storage z ou _ _) = show z ++ "\n" ++ show ou
+
 
 mkLabel ''Storage
 
-type ZipperM m a = StateT (Storage a) m
+type ZipperM m a = StateT (Storage m a) m
 
 toZipper :: MTree a -> Zipper a 
 toZipper t = (t, [])
+
+mkModule :: (Monad m, MonadIO m) => OID -> [MIB m a] -> Storage m a
+mkModule o ms = 
+  let (tr, u) = buildTree ms
+  in Storage (toZipper tr) u [] o
 
 attach :: MTree a -> Zipper a -> Zipper a 
 attach t (_, bs) = (t, bs)
@@ -142,9 +237,9 @@ oidFromZipper (z, m) = foldl fun [gi z] m
 c1 :: Maybe Context 
 c1 = Just "context1"
 
-findOne :: OID -> Maybe Context -> Zipper a -> Maybe (Zipper a)
-findOne [] _ z = Just z
-findOne ys mc z = walk ys (top z)
+setCursor :: OID -> Maybe Context -> Zipper a -> Maybe (Zipper a)
+setCursor [] _ z = Just z
+setCursor ys mc z = walk ys (top z)
   where
   giz :: Zipper a -> (Integer, Maybe Context)
   giz (Node i _ _  , _) = (i, Nothing)
@@ -159,4 +254,5 @@ findOne ys mc z = walk ys (top z)
     | x == fst (giz t) = goLevel t >>= walk xs 
     | otherwise = goNext  t >>= walk (x : xs) 
 
-findMany :: [OID] -> Maybe Context -> Zipper 
+findMany :: [OID] -> Maybe Context -> [MIB m a]
+findMany = undefined
