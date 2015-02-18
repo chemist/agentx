@@ -4,6 +4,7 @@ module Main where
 
 import Network.Protocol.Snmp.AgentX (Value(..))
 import Network.Protocol.Snmp.AgentX.MIBTree.Types 
+import Network.Protocol.Snmp.AgentX.MIBTree.MIB 
 import Network.Info
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
@@ -14,42 +15,42 @@ import Data.Monoid ((<>))
 -- import Control.Monad.State.Strict
 
 pv1 :: PVal IO
-pv1 = Read (return (String "hello"))
+pv1 = rsValue (String "hello")
 
 pv2 :: PVal IO
-pv2 = Read (return (Integer 1))
+pv2 = rsValue (Integer 1)
 
-subTree :: Update IO (PVal IO)
+subTree :: UpdateM IO 
 subTree = Update (return ls)
   where
-    ls :: [MIB IO (PVal IO)]
+    ls :: [MIBM IO]
     ls =
         [ mkObject 3 "dyn" "tree" Nothing
         , mkObjectType 0 "tree" "about" Nothing pv1
         , mkObjectType 1 "tree" "name" Nothing pv1
         ]
 
-interfaces :: Update IO (PVal IO) 
+interfaces :: UpdateM IO 
 interfaces = Update ifaces
     where 
     ifaces = do
         nx <- getNetworkInterfaces
         let xs = zip [0 .. fromIntegral $ length nx - 1] nx
-            indexes, names, ipv4s, ipv6s, macs :: [MIB IO (PVal IO)]
-            indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" Nothing (readOnly . Integer . fromIntegral $ i) 
-            names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" Nothing (readOnly . String . pack . NI.name $ o) 
-            ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" Nothing (readOnly . String . pack . show . NI.ipv4 $ o) 
-            ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" Nothing (readOnly . String . pack . show . NI.ipv6 $ o) 
-            macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" Nothing (readOnly . String . pack . show . NI.mac $ o) 
+            indexes, names, ipv4s, ipv6s, macs :: [MIBM IO]
+            indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" Nothing (rsValue . Integer . fromIntegral $ i) 
+            names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" Nothing (rsValue . String . pack . NI.name $ o) 
+            ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" Nothing (rsValue . String . pack . show . NI.ipv4 $ o) 
+            ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" Nothing (rsValue . String . pack . show . NI.ipv6 $ o) 
+            macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" Nothing (rsValue . String . pack . show . NI.mac $ o) 
         return $ 
             mkObject 4 "net" "interfaces" Nothing :
               (mkObject 0 "interfaces" "indexes" Nothing : indexes) <>
               (mkObject 1 "interfaces" "names"   Nothing : names)   <>
               (mkObject 2 "interfaces" "ipv4s"   Nothing : ipv4s)   <>
               (mkObject 3 "interfaces" "ipv6s"   Nothing : ipv6s)   <>
-              (mkObject 4 "interfaces" "macs"    (Just interfaces) : macs) 
+              (mkObject 4 "interfaces" "macs"    (Just subTree) : macs) 
 
-simpleTree :: [MIB IO (PVal IO)]
+simpleTree :: [MIBM IO]
 simpleTree = 
       [ mkObject 0 "Fixmon" "about" Nothing
       , mkObjectType 0 "about" "name" Nothing pv1 
