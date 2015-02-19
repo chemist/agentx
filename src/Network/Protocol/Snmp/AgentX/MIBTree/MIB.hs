@@ -32,7 +32,19 @@ mkObjectType = ObjectType []
 
 fillOid :: [MIB m a] -> [MIB m a]
 fillOid [] = []
-fillOid (ObjectType{} : _) = error "makeOid: first record cant be ObjectType"
+fillOid (ObjectType o i p n v u : xs) 
+  | o == [] = ObjectType [i] i p n v u : mkOid' [(p, []), (n, [i])] xs
+  | otherwise = ObjectType o i p n v u : mkOid' [(p, []), (n, o)] xs
+  where
+    mkOid' :: [(Parent, OID)] -> [MIB m a] -> [MIB m a]
+    mkOid' _ [] = []
+    mkOid' base (y:ys) =
+        let Just prev = lookup (parent y) base
+            newbase = (name y, prev <> [int y]) : base
+        in addOid prev y : mkOid' newbase ys
+    addOid :: OID -> MIB m a -> MIB m a
+    addOid o' (Object _ i' p' n' u') = Object (o' <> [i']) i' p' n' u'
+    addOid o' (ObjectType _ i' p' n' v' u') = ObjectType (o' <> [i']) i' p' n' v' u'
 fillOid (Object o i p n u : xs) 
   | o == [] = Object [i] i p n u :  mkOid' [(p, []), (n, [i])] xs
   | otherwise = Object o i p n u : mkOid' [(p, []), (n, o)] xs

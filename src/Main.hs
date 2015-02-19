@@ -12,7 +12,11 @@ import Data.Monoid ((<>))
 -- import Network.Protocol.Snmp.AgentX.MIBTree.Operations  
 -- import qualified Data.Map.Strict as Map
 -- import Control.Concurrent.MVar
--- import Control.Monad.State.Strict
+import Control.Monad.State.Strict
+
+
+main :: IO ()
+main = print =<< execStateT initModule (mkModule [0,1,2] simpleTree)
 
 pv1 :: PVal IO
 pv1 = rsValue (String "hello")
@@ -25,8 +29,7 @@ subTree = Update (return ls)
   where
     ls :: [MIBM IO]
     ls =
-        [ mkObject 3 "dyn" "tree" Nothing
-        , mkObjectType 0 "tree" "about" Nothing pv1
+        [ mkObjectType 0 "tree" "about" Nothing pv1
         , mkObjectType 1 "tree" "name" Nothing pv1
         ]
 
@@ -43,12 +46,11 @@ interfaces = Update ifaces
             ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" Nothing (rsValue . String . pack . show . NI.ipv6 $ o) 
             macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" Nothing (rsValue . String . pack . show . NI.mac $ o) 
         return $ 
-            mkObject 4 "net" "interfaces" Nothing :
               (mkObject 0 "interfaces" "indexes" Nothing : indexes) <>
               (mkObject 1 "interfaces" "names"   Nothing : names)   <>
               (mkObject 2 "interfaces" "ipv4s"   Nothing : ipv4s)   <>
               (mkObject 3 "interfaces" "ipv6s"   Nothing : ipv6s)   <>
-              (mkObject 4 "interfaces" "macs"    (Just subTree) : macs) 
+              (mkObject 4 "interfaces" "macs"    Nothing : macs) 
 
 simpleTree :: [MIBM IO]
 simpleTree = 
@@ -64,8 +66,6 @@ simpleTree =
       , mkObject 4 "dyn" "net" (Just interfaces)
       ]
 
-main :: IO ()
-main = undefined
 
 
 

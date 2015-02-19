@@ -4,12 +4,10 @@ module Network.Protocol.Snmp.AgentX.MIBTree.Tree where
 
 import Data.Maybe (fromJust)
 import Data.Monoid 
-import Control.Applicative
-import Data.Foldable
-import Data.Traversable
+-- import Control.Applicative
 import Network.Protocol.Snmp.AgentX.Packet (Context)
 import Network.Protocol.Snmp (OID)
-import Prelude hiding (foldl)
+import Prelude 
 
 data Move b a = Next (b a)
               | Level (b a)
@@ -45,14 +43,6 @@ data Tree a = Node a (Tree a) (Tree a)
             | Empty
             deriving (Functor, Eq)
 
-instance Foldable Tree where
-    foldMap _ Empty = mempty
-    foldMap f (Node v next level) = f v <> foldMap f next <> foldMap f level
-
-instance Traversable Tree where
-    traverse _ Empty = pure Empty
-    traverse f (Node v next level) = Node <$> f v <*> traverse f next <*> traverse f level
-
 instance HasIndex a => Monoid (Tree a) where
     mempty = Empty
     mappend a Empty = a
@@ -77,7 +67,8 @@ testTree = Node (0, Just "first") (Node (1, Just "second") Empty Empty) (Node (1
 
 instance Zippers Tree where
     toZipper t = (t, [])
-    attach t (_, bs) = (t, bs)
+    attach t (Empty, bs) = (t, bs)
+    attach t (Node v next _, bs) = (Node v next t, bs)
 
     goNext (Empty, _) = Nothing
     goNext (Node _ Empty _, _) = Nothing

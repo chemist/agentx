@@ -4,11 +4,12 @@
 {-# LANGUAGE KindSignatures #-}
 module Network.Protocol.Snmp.AgentX.MIBTree.Types where
 
-import Control.Monad.State.Strict hiding (gets, modify)
+import Control.Monad.State.Strict 
 -- import Control.Concurrent.MVar
 import Data.Monoid ((<>))
-import Data.Foldable
-import Data.Label
+import Data.Maybe 
+import Data.Foldable (foldMap)
+import Control.Applicative
 
 import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
 import Network.Protocol.Snmp.AgentX.MIBTree.MIB 
@@ -75,8 +76,6 @@ instance Show a => Show (Module m a) where
     show (Module z ou _) = show z ++ "\n" ++ show ou
 
 
-mkLabel ''Module
-
 type ZipperM m a = StateT (Module m a) m
 
 mkModule :: (Monad m, MonadIO m) => OID -> [MIB m a] -> Module m a
@@ -99,15 +98,45 @@ buildTree ms = foldMap singleton $ fillOid ms
         singleton' ((i:xs), obj@(Object _ _ _ _ (Just _))) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Node (zero i) Empty (snd $ singleton' (xs, obj)))
         singleton' ((i:xs), obj@(ObjectType{})) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
 
-initModule :: (Monad m, MonadIO m) => Module m a -> m (Module m a)
-initModule m = do
+
+getUpdateList :: (Monad m, MonadIO m, Functor m) => ZipperM m a [MIB m a]
+getUpdateList = do
+    _ou <-  _ou <$> get 
     undefined
 
+initModule :: (Show a, Monad m, MonadIO m, Functor m) => ZipperM m a ()
+initModule = do
+    (o, _) <- _ou <$> get
+    let updates = toUpdateList o
+    forM_ updates evalTree 
+    modify $ \s -> s { _zipper = top (_zipper s) }
 
+evalTree :: (Show a, Monad m, MonadIO m, Functor m) => MIB m a -> ZipperM m a ()
+evalTree obj = do
+    newMibs <- lift $ (unUpdate . fromJust . update) obj
+--     liftIO $ print newMibs
+    modify $ \s -> s { _zipper = top (_zipper s) }
+    modify $ \s -> s { _zipper = fromJust (setCursor (oi obj) Nothing (_zipper s)) }
+    modify $ \s -> s { _zipper = attach (fst (buildTree newMibs)) (_zipper s) }
+    
 
-c1 :: Maybe Context 
-c1 = Just "context1"
+toUpdateList :: Tree (ICV (Update m a)) -> [MIB m a]
+toUpdateList Empty = []
+toUpdateList t = toUpdateList' ([], t)
+  where
+  toUpdateList' :: (OID, Tree (ICV (Update m a))) -> [MIB m a]
+  toUpdateList' (o, Node x next level) = if withValue x
+                                           then Object (o <> [index x]) (index x) "" "" (valueFromICV x) 
+                                                : toUpdateList' (o, next) 
+                                                <> toUpdateList' ((o <> [index x]), level)
+                                           else toUpdateList' (o, next)
+                                                <> toUpdateList' ((o <> [index x]), level)
+  toUpdateList' _ = []
+  valueFromICV (ICV (_, _, x)) = x
+                                           
 
+goClosest :: OID -> Maybe Context -> Zipper m a -> Maybe (Zipper m a)
+goClosest = undefined
 
 findMany :: [OID] -> Maybe Context -> [MIB m a]
 findMany = undefined
