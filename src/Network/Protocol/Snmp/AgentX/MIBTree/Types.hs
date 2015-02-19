@@ -6,13 +6,11 @@ module Network.Protocol.Snmp.AgentX.MIBTree.Types where
 
 import Control.Monad.State.Strict hiding (gets, modify)
 -- import Control.Concurrent.MVar
--- import Data.Monoid ((<>))
+import Data.Monoid ((<>))
+import Data.Foldable
 import Data.Label
 
-import Network.Protocol.Snmp.AgentX.MIBTree.MTree 
-import Network.Protocol.Snmp.AgentX.MIBTree.UTree (UTree)
-import qualified Network.Protocol.Snmp.AgentX.MIBTree.UTree as U 
-import Network.Protocol.Snmp.AgentX.MIBTree.Zipper
+import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
 import Network.Protocol.Snmp.AgentX.MIBTree.MIB 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError)
@@ -44,45 +42,66 @@ instance (Monad m, MonadIO m) => Show (PVal m) where
 
 type MIBM m = MIB m (PVal m)
 
-singleton :: (Monad m, MonadIO m) => MIB m a -> (MTree a, UTree (Update m a))
-singleton m = singleton' (oi m, oi m,  m)
-  where
-    singleton' :: (OID, OID, MIB m a) -> (MTree a, UTree (Update m a))
-    singleton' ([], _, _) = (Empty, U.Empty)
-    singleton' ([_], _, Object _ i _ _ Nothing) = (Node i Empty Empty, U.Empty )
-    singleton' ([_], _, Object _ i _ _ (Just u)) = (Node i Empty Empty, U.Node i (Just u) U.Empty U.Empty )
-    singleton' ([_], _, ObjectType _ i _ _ c v) = (Leaf i c v Empty, U.Empty)
-    singleton' ((i:xs), o, obj@(Object _ _ _ _ Nothing)) = (Node i Empty (fst $ singleton' (xs, o, obj)), U.Empty)
-    singleton' ((i:xs), o, obj@(Object _ _ _ _ (Just _))) = (Node i Empty (fst $ singleton' (xs, o, obj)), U.Node i Nothing U.Empty (snd $ singleton' (xs, o, obj)))
-    singleton' ((i:xs), o, obj@(ObjectType{})) = (Node i Empty (fst $ singleton' (xs, o, obj)), U.Empty)
+newtype ICV a = ICV (Integer, Maybe Context, Maybe a) 
 
-buildTree :: (Monad m, MonadIO m) => [MIB m a] -> (MTree a, UTree (Update m a))
-buildTree xs = 
-  let mib = map singleton $ fillOid xs
-      updates = map singleton $ fillOid xs
-  in (foldl1 insert . map fst $ mib, foldl1 insert . map snd $ updates)
+instance Show a => Show (ICV a) where
+    show (ICV (_, Nothing, Nothing)) = "- node -"
+    show (ICV (_, Nothing, Just v)) = "- leaf " <> show v
+    show (ICV (_, Just c, Just v)) = "- contexted leaf " <> show c <> show v
+    show _ = "bad node"
 
+
+instance HasIndex (ICV a) where
+    index (ICV (i, _, _)) = i
+    split (ICV (i, x, y)) (ICV (_, x1, y1)) = ICV (i, x `fun` x1, y `fun` y1)
+      where
+      fun Nothing a = a
+      fun a Nothing = a
+      fun _ _ = error "HasIndex (ICV)"
+    withValue (ICV (_, _, Just _)) = True
+    withValue _ = False
+    context (ICV (_, c, _)) = c
+    
 
 type UpdateM m = Update m (PVal m)
 
-data Storage m a = Storage
-  { _zipper        :: Zipper MTree a
-  , _ou            :: Zipper UTree (Update m a)
+data Module m a = Module
+  { _zipper        :: Zipper Tree (ICV a)
+  , _ou            :: Zipper Tree (ICV (Update m a))
   , _moduleOID     :: OID
   } 
 
-instance Show a => Show (Storage m a) where
-    show (Storage z ou _) = show z ++ "\n" ++ show ou
+instance Show a => Show (Module m a) where
+    show (Module z ou _) = show z ++ "\n" ++ show ou
 
 
-mkLabel ''Storage
+mkLabel ''Module
 
-type ZipperM m a = StateT (Storage m a) m
+type ZipperM m a = StateT (Module m a) m
 
-mkModule :: (Monad m, MonadIO m) => OID -> [MIB m a] -> Storage m a
-mkModule o ms = 
-  let (tr, u) = buildTree ms
-  in Storage (toZipper tr) (toZipper u) o
+mkModule :: (Monad m, MonadIO m) => OID -> [MIB m a] -> Module m a
+mkModule moduleOid mibs = Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid
+
+buildTree :: (Monad m, MonadIO m) => [MIB m a] -> (Tree (ICV a), Tree (ICV (Update m a)))
+buildTree ms = foldMap singleton $ fillOid ms
+  where
+    singleton :: (Monad m, MonadIO m) => MIB m a -> (Tree (ICV a), Tree (ICV (Update m a)))
+    singleton m = singleton' (oi m, m)
+      where
+        zero :: Integer -> ICV a
+        zero i = ICV (i, Nothing, Nothing)
+        singleton' :: (OID, MIB m a) -> (Tree (ICV a), Tree (ICV (Update m a)))
+        singleton' ([],  _) = (Empty, Empty)
+        singleton' ([_], Object _ i _ _ Nothing) = (Node (zero i) Empty Empty, Empty )
+        singleton' ([_], Object _ i _ _ (Just u)) = (Node (zero i) Empty Empty, Node (ICV (i, Nothing, Just u)) Empty Empty )
+        singleton' ([_], ObjectType _ i _ _ c v) = (Node (ICV (i, c, Just v)) Empty Empty, Empty)
+        singleton' ((i:xs), obj@(Object _ _ _ _ Nothing)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
+        singleton' ((i:xs), obj@(Object _ _ _ _ (Just _))) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Node (zero i) Empty (snd $ singleton' (xs, obj)))
+        singleton' ((i:xs), obj@(ObjectType{})) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
+
+initModule :: (Monad m, MonadIO m) => Module m a -> m (Module m a)
+initModule m = do
+    undefined
 
 
 
