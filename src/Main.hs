@@ -9,14 +9,16 @@ import Network.Info
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
 import Data.Monoid ((<>))
--- import Network.Protocol.Snmp.AgentX.MIBTree.Operations  
+import Network.Protocol.Snmp.AgentX.MIBTree.MIBTree  
 -- import qualified Data.Map.Strict as Map
 -- import Control.Concurrent.MVar
 import Control.Monad.State.Strict
 
 
 main :: IO ()
-main = print =<< execStateT initModule (mkModule [0,1,2] simpleTree)
+main = do 
+  print =<< execStateT initModule (mkModule [0,1,2] simpleTree)
+  putStrLn "end"
 
 pv1 :: PVal IO
 pv1 = rsValue (String "hello")
@@ -29,9 +31,28 @@ subTree = Update (return ls)
   where
     ls :: [MIBM IO]
     ls =
-        [ mkObjectType 0 "tree" "about" Nothing pv1
+        [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree"))
         , mkObjectType 1 "tree" "name" Nothing pv1
+        , mkObject 2 "tree" "sub" (Just subTree1)
+        , mkObject 3 "tree" "sub" (Just subTree2)
         ]
+
+subTree1 :: UpdateM IO
+subTree1 = Update (return ls)
+  where
+    ls :: [MIBM IO]
+    ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree1"))
+         , mkObjectType 1 "tree" "name" Nothing pv1
+         , mkObject 2 "tree" "sub" (Just subTree2)
+         ]
+
+subTree2 :: UpdateM IO
+subTree2 = Update (return ls)
+  where
+    ls :: [MIBM IO]
+    ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree2"))
+         , mkObjectType 1 "tree" "name" Nothing pv1
+         ]
 
 interfaces :: UpdateM IO 
 interfaces = Update ifaces
@@ -63,7 +84,7 @@ simpleTree =
       , mkObjectType 1 "dyn" "version" Nothing pv1
       , mkObjectType 2 "dyn" "contexted" Nothing pv2
       , mkObject 3 "dyn" "tree" (Just subTree)
-      , mkObject 4 "dyn" "net" (Just interfaces)
+      , mkObject 4 "dyn" "net" (Just subTree1)
       ]
 
 
