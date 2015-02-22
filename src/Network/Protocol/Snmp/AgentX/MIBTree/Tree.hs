@@ -8,6 +8,7 @@ import Data.Monoid
 import Network.Protocol.Snmp.AgentX.Packet (Context)
 import Network.Protocol.Snmp (OID)
 import Prelude 
+-- import Debug.Trace
 
 data Move b a = Next (b a)
               | Level (b a)
@@ -103,7 +104,7 @@ instance Zippers Tree where
     setCursor ys c z = walk ys (top z)
       where
       giz (Node x _ _  , _) = (index x, context x)
-      giz _ = error "goClosest: giz"
+      giz _ = error "setCursor: giz Empty Tree"
       walk [] t = Just t
       walk (x : []) t
         | (x, c) == giz t = Just t
@@ -115,3 +116,4 @@ instance Zippers Tree where
     cursor ((Node v _ _), _) = Just (index v, context v)
     cursor (Empty       , _) = Nothing
 
+                      
