@@ -61,7 +61,6 @@ library
                      , pipes-network
                      , pipes
                      , pipes-concurrency
-                     , free
   hs-source-dirs:      src
   ghc-options: -Wall
   default-language:    Haskell2010
