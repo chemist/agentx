@@ -7,8 +7,9 @@ import Control.Monad.State.Strict (MonadIO, forM_, lift, get, put)
 import Network.Protocol.Snmp.AgentX.MIBTree.Types 
 import Network.Protocol.Snmp.AgentX.MIBTree.Tree
 import Network.Protocol.Snmp.AgentX.MIBTree.MIB  hiding (context)
-import Network.Protocol.Snmp (OID)
-import Network.Protocol.Snmp.AgentX.Packet (Context)
+import Network.Protocol.Snmp (OID, Value(EndOfMibView))
+import Network.Protocol.Snmp.AgentX.Packet (Context, SearchRange, startOID, endOID)
+import qualified Data.Label as L
 
 import Data.Monoid
 import Data.Label.Monadic
@@ -68,7 +69,14 @@ toRegistrationList (t, _)  = toRegistrationList' ([], t)
   valueFromICV (ICV (_, _, Just x)) = x
   valueFromICV _ = error "toRegistrationList: Opps, you found bug!!!"
                                            
+
+inRange :: (Monad m, MonadIO m, Functor m) => SearchRange -> MIBM m -> MIBM m 
+inRange s m =
+    if (L.get startOID s) <= oi m && oi m < (L.get endOID s)
+        then ObjectType (oi m) 0 "" "" Nothing (val m)
+        else ObjectType (L.get startOID s) 0 "" "" Nothing (rsValue EndOfMibView)
+
+
 findMany :: [OID] -> Maybe Context -> [MIB m a]
 findMany = undefined
-
 

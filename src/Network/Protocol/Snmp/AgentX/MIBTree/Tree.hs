@@ -116,4 +116,12 @@ instance Zippers Tree where
     cursor ((Node v _ _), _) = Just (index v, context v)
     cursor (Empty       , _) = Nothing
 
+hasLevel :: Zipper Tree a -> Bool
+hasLevel (Node _ _ Empty, _) = False
+hasLevel _ = True
+
+hasNext :: Zipper Tree a -> Bool
+hasNext (Node _ Empty _, _) = False
+hasNext _ = True
                       
+
