@@ -92,7 +92,9 @@ getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange]
 getBulkHandler = undefined
 
 mibToVarBind :: MIBM IO -> IO VarBind
-mibToVarBind = undefined
+mibToVarBind m = do
+    v <- readAIO (val m) 
+    return $ VarBind (oi m) v
 
 {--
 getUpdate :: Maybe Context -> VarBind -> AgentT (Either TaggedError Update)

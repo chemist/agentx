@@ -141,8 +141,8 @@ findOne ys c = do
               cleanHead (Node v _ l) = Node v Empty l
           in top (cleanHead x, map cleanUnused $ filter isLevel u)
 
-findMany :: [OID] -> Maybe Context -> MIBTree m a [MIB m a]
-findMany = undefined
+findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m (PVal m) [MIBM m]
+findMany xs mc = mapM (flip findOne mc) xs
 
 findNext :: SearchRange -> Maybe Context -> MIBTree m a (MIB m a)
 findNext = undefined
