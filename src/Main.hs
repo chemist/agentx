@@ -11,21 +11,8 @@ import Data.ByteString.Char8 (pack)
 import Data.Monoid ((<>))
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Control.Monad.State.Strict
 import Control.Applicative ((<$>))
 
-
-check :: IO ()
-check = do 
-  m <- mkModule [] simpleTree
-  t <- flip execStateT m $ do
-      initModule
-      one <- findOne [1, 3, 2, 1] Nothing
-      o <- lift $ readAIO (val one)
-      liftIO $ print one
-      liftIO $ print o
-  print t
-  putStrLn "end"
 
 pv1 :: PVal IO
 pv1 = rsValue (String "hello")
@@ -86,16 +73,16 @@ interfaces = Update ifaces
 simpleTree :: [MIBM IO]
 simpleTree = 
       [ mkObject 0 "Fixmon" "about" Nothing
-      , mkObjectType 0 "about" "name" Nothing pv1 
-      , mkObjectType 1 "about" "version" Nothing pv1
-      , mkObjectType 2 "about" "contexted" Nothing pv2
+      , mkObjectType 0 "about" "name" Nothing $ rsValue (String "Fixmon agent")
+      , mkObjectType 1 "about" "version" Nothing $ rsValue (String "0.0.1")
+      , mkObjectType 1 "about" "version" (Just "version") $ rsValue (String "Alpha")
       , mkObject 1 "Fixmon" "dyn" Nothing
       , mkObjectType 0 "dyn" "name" Nothing pv1 
       , mkObjectType 1 "dyn" "version" Nothing pv1
       , mkObjectType 2 "dyn" "contexted" Nothing pv2
       , mkObject 3 "dyn" "tree" (Just subTree)
       , mkObject 4 "dyn" "net" (Just subTree1)
-      , mkObjectType 2 "Fixmon" "contexted" Nothing pv2
+      , mkObject 2 "Fixmon" "interfaces" (Just interfaces)
       ]
 
 
@@ -103,5 +90,5 @@ simpleTree =
 
 
 main :: IO ()
-main = agent "/var/agentx/master" [] simpleTree
+main = agent "/var/agentx/master" [1,3,6,1,4,1,44729] simpleTree
 

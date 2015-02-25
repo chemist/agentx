@@ -35,7 +35,6 @@ class Zippers b where
 
 class HasIndex a where
     index :: a -> Integer
-    split :: a -> a -> a
     withValue :: a -> Bool
     context :: a -> Maybe Context
     
@@ -49,7 +48,7 @@ instance HasIndex a => Monoid (Tree a) where
     mappend a Empty = a
     mappend Empty a = a
     mappend (Node v next link) x@(Node v1 next1 link1)
-       | index v == index v1 = Node (v `split` v1) (next <> next1) (link <> link1) 
+       | index v == index v1 && context v == context v1 = Node v (next <> next1) (link <> link1) 
        | otherwise = Node v (next <> x) link 
 
 

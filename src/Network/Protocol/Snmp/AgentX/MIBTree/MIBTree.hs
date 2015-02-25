@@ -11,6 +11,7 @@ import Network.Protocol.Snmp (OID, Value(EndOfMibView, NoSuchInstance, NoSuchObj
 import Network.Protocol.Snmp.AgentX.Packet (Context, SearchRange, startOID, endOID)
 import Control.Concurrent.MVar
 import qualified Data.Label as L
+import Data.List (stripPrefix)
 
 import Data.Monoid
 import Data.Label.Monadic
@@ -42,8 +43,14 @@ initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou
 initAndRegister :: (Monad m, MonadIO m, Functor m) => MIBTree m (PVal m) ()
 initAndRegister = do
     initModule
-    Module z _ _ _ mv _<- get 
-    liftIO $ putMVar mv (toRegistrationList z)
+    Module z _ b _ mv _<- get 
+    liftIO $ putMVar mv (addBaseOid b $ toRegistrationList z)
+
+addBaseOid :: (Monad m, MonadIO m, Functor m) =>  OID -> [MIBM m] -> [MIBM m]
+addBaseOid b = map fun
+    where
+    fun (ObjectType o i _ _ c v) = ObjectType (b <> o) i "" "" c v
+    fun _ = error "only objectType can be registered"
 
 toUpdateList :: Zipper Tree (ICV (Update m a)) -> [MIB m a]
 toUpdateList (Empty, _) = []
@@ -86,28 +93,39 @@ inRange s m =
 
 findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m (PVal m) (MIBM m)
 findOne ys c = do
-    modify findOid (const ys)
-    updates <- gets ou
-    puts ou (updateSubtree ys updates)
-    initModule
-    puts ou updates
-    findOne' ys c
+    -- init zippers
+    modify zipper top
+    modify ou top
+    modOID <- gets moduleOID
+    -- strip module prefix
+    case stripPrefix modOID ys of
+         Nothing -> return $ ObjectType ys (last ys) "" "" c nso
+         Just ys' -> do
+             -- save requested oid in state
+             modify findOid (const ys)
+             updates <- gets ou
+             -- put update subtree to state
+             puts ou (updateSubtree ys' updates)
+             -- update dynamic branches
+             initModule
+             -- get back full update tree
+             puts ou updates
+             -- find
+             findOne' ys' c
     where
       findOne' :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m (PVal m) (MIBM m)
-      findOne' [] _ = return $ ObjectType [] 0 "" "" Nothing (rsValue NoSuchInstance)
+      findOne' [] _ = return $ ObjectType [] 0 "" "" Nothing nsi
       findOne' (x : []) mc = do
           Just ic <- cursor <$> gets zipper 
-          isValue <- hasValue <$> gets zipper
-          v <- getValueFromTree <$> gets zipper 
+          maybeValue <- getValueFromHead <$> gets zipper 
           isNext <- hasNext <$> gets zipper
           o <- gets findOid
-          case (ic == (x, mc), isValue, isNext) of
-               (True, True, _) -> return $ ObjectType o x "" "" mc v
-               (True, False, _) -> return $ ObjectType o x "" "" mc (rsValue NoSuchObject)
-               (False, _, True) -> do
+          case (ic == (x, mc), isNext) of
+               (True, _) -> return $ ObjectType o x "" "" mc (fromMaybe nso maybeValue)
+               (False, True) -> do
                    modify zipper (fromJust . goNext) 
                    findOne' (x : []) mc
-               _ -> return $ ObjectType o x "" "" mc (rsValue NoSuchInstance)
+               _ -> return $ ObjectType o x "" "" mc nsi
       findOne' (x : xs) mc = do
           isNextZipper <- hasNext <$> gets zipper
           isLevelZipper <- hasLevel <$> gets zipper
@@ -120,15 +138,15 @@ findOne ys c = do
                (False, True, _) -> do
                    modify zipper (fromJust . goNext) 
                    findOne' (x : xs) mc
-               _ -> return $ ObjectType o x "" "" mc (rsValue NoSuchObject)
+               _ -> return $ ObjectType o x "" "" mc nso
 
-      hasValue :: Zipper Tree (ICV a) -> Bool
-      hasValue (Node (ICV (_, _, Just _)) _ Empty, _) = True
-      hasValue _ = False
+      nso, nsi :: (Monad m, MonadIO m, Functor m) => PVal m
+      nso = rsValue NoSuchObject
+      nsi = rsValue NoSuchInstance
 
-      getValueFromTree :: (Monad m, MonadIO m, Functor m) => Zipper Tree (ICV (PVal m)) -> PVal m
-      getValueFromTree (Node (ICV (_, _, Just v)) _ _, _) = v
-      getValueFromTree _ = error "getValueFromTree"
+      getValueFromHead :: Zipper Tree (ICV a) -> Maybe a
+      getValueFromHead (Node (ICV (_, _, v)) _ Empty, _) = v
+      getValueFromHead _ = Nothing
 
       updateSubtree :: HasIndex a => OID -> Zipper Tree a -> Zipper Tree a
       updateSubtree xs z =

@@ -57,11 +57,6 @@ instance Show a => Show (ICV a) where
 
 instance HasIndex (ICV a) where
     index (ICV (i, _, _)) = i
-    split (ICV (i, x, y)) (ICV (_, x1, y1)) = ICV (i, x `fun` x1, y `fun` y1)
-      where
-      fun Nothing a = a
-      fun a Nothing = a
-      fun _ _ = error "HasIndex (ICV)"
     withValue (ICV (_, _, Just _)) = True
     withValue _ = False
     context (ICV (_, c, _)) = c
