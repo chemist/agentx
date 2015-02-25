@@ -5,7 +5,7 @@ import Data.Maybe
 import Control.Applicative
 import Control.Monad.State.Strict (MonadIO, forM_, lift, get, put, liftIO)
 import Network.Protocol.Snmp.AgentX.MIBTree.Types 
-import Network.Protocol.Snmp.AgentX.MIBTree.Tree
+import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
 import Network.Protocol.Snmp.AgentX.MIBTree.MIB  hiding (context)
 import Network.Protocol.Snmp (OID, Value(EndOfMibView, NoSuchInstance, NoSuchObject))
 import Network.Protocol.Snmp.AgentX.Packet (Context, SearchRange, startOID, endOID)
@@ -92,17 +92,15 @@ inRange s m =
 
 
 findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m (PVal m) (MIBM m)
-findOne ys c = do
+findOne ys mcontext = do
     -- init zippers
     modify zipper top
     modify ou top
     modOID <- gets moduleOID
     -- strip module prefix
     case stripPrefix modOID ys of
-         Nothing -> return $ ObjectType ys (last ys) "" "" c nso
+         Nothing -> return $ ObjectType ys (last ys) "" "" mcontext nso
          Just ys' -> do
-             -- save requested oid in state
-             modify findOid (const ys)
              updates <- gets ou
              -- put update subtree to state
              puts ou (updateSubtree ys' updates)
@@ -111,34 +109,32 @@ findOne ys c = do
              -- get back full update tree
              puts ou updates
              -- find
-             findOne' ys' c
+             findOne' ys' 
     where
-      findOne' :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m (PVal m) (MIBM m)
-      findOne' [] _ = return $ ObjectType [] 0 "" "" Nothing nsi
-      findOne' (x : []) mc = do
+      findOne' :: (Monad m, MonadIO m, Functor m) => OID -> MIBTree m (PVal m) (MIBM m)
+      findOne' [] = return $ ObjectType ys 0 "" "" Nothing nsi
+      findOne' (x : []) = do
           Just ic <- cursor <$> gets zipper 
           maybeValue <- getValueFromHead <$> gets zipper 
           isNext <- hasNext <$> gets zipper
-          o <- gets findOid
-          case (ic == (x, mc), isNext) of
-               (True, _) -> return $ ObjectType o x "" "" mc (fromMaybe nso maybeValue)
+          case (ic == (x, mcontext), isNext) of
+               (True, _) -> return $ ObjectType ys x "" "" mcontext (fromMaybe nso maybeValue)
                (False, True) -> do
                    modify zipper (fromJust . goNext) 
-                   findOne' (x : []) mc
-               _ -> return $ ObjectType o x "" "" mc nsi
-      findOne' (x : xs) mc = do
+                   findOne' (x : []) 
+               _ -> return $ ObjectType ys x "" "" mcontext nsi
+      findOne' (x : xs) = do
           isNextZipper <- hasNext <$> gets zipper
           isLevelZipper <- hasLevel <$> gets zipper
           Just (i, _) <- cursor <$> gets zipper 
-          o <- gets findOid
           case (i == x, isNextZipper, isLevelZipper) of
                (True, _, True) -> do
                    modify zipper (fromJust . goLevel) 
-                   findOne' xs mc
+                   findOne' xs 
                (False, True, _) -> do
                    modify zipper (fromJust . goNext) 
-                   findOne' (x : xs) mc
-               _ -> return $ ObjectType o x "" "" mc nso
+                   findOne' (x : xs) 
+               _ -> return $ ObjectType ys x "" "" mcontext nso
 
       nso, nsi :: (Monad m, MonadIO m, Functor m) => PVal m
       nso = rsValue NoSuchObject
