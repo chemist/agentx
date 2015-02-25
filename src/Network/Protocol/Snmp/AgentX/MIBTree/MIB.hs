@@ -24,6 +24,10 @@ data MIB m a = Object
     , val :: a
     }
 
+isObjectType :: MIB m a -> Bool
+isObjectType (ObjectType{}) = True
+isObjectType _ = False
+
 mkObject :: (Monad m, MonadIO m) => Integer -> Parent -> Name -> Maybe (Update m a) -> MIB m a
 mkObject = Object [] 
 

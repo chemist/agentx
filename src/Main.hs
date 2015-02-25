@@ -3,21 +3,28 @@
 module Main where
 
 import Network.Protocol.Snmp.AgentX (Value(..))
-import Network.Protocol.Snmp.AgentX.MIBTree.Types 
-import Network.Protocol.Snmp.AgentX.MIBTree.MIB 
+import Network.Protocol.Snmp.AgentX.MIBTree
+import Network.Protocol.Snmp.AgentX.Service
 import Network.Info
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
 import Data.Monoid ((<>))
-import Network.Protocol.Snmp.AgentX.MIBTree.MIBTree  
--- import qualified Data.Map.Strict as Map
--- import Control.Concurrent.MVar
+import Data.Fixed (div')
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Monad.State.Strict
+import Control.Applicative ((<$>))
 
 
-main :: IO ()
-main = do 
-  print =<< execStateT initModule (mkModule [0,1,2] simpleTree)
+check :: IO ()
+check = do 
+  m <- mkModule [] simpleTree
+  t <- flip execStateT m $ do
+      initModule
+      one <- findOne [1, 3, 2, 1] Nothing
+      o <- lift $ readAIO (val one)
+      liftIO $ print one
+      liftIO $ print o
+  print t
   putStrLn "end"
 
 pv1 :: PVal IO
@@ -25,6 +32,9 @@ pv1 = rsValue (String "hello")
 
 pv2 :: PVal IO
 pv2 = rsValue (Integer 1)
+
+now :: PVal IO
+now = rdValue $  TimeTicks . flip div' 1 <$> getPOSIXTime
 
 subTree :: UpdateM IO 
 subTree = Update (return ls)
@@ -42,7 +52,7 @@ subTree1 = Update (return ls)
   where
     ls :: [MIBM IO]
     ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree1"))
-         , mkObjectType 1 "tree" "name" Nothing pv1
+         , mkObjectType 1 "tree" "name" Nothing now
          , mkObject 2 "tree" "sub" (Just subTree2)
          ]
 
@@ -85,109 +95,13 @@ simpleTree =
       , mkObjectType 2 "dyn" "contexted" Nothing pv2
       , mkObject 3 "dyn" "tree" (Just subTree)
       , mkObject 4 "dyn" "net" (Just subTree1)
+      , mkObjectType 2 "Fixmon" "contexted" Nothing pv2
       ]
 
 
 
 
-{--
-import Network.Protocol.Snmp.AgentX
-import Network.Info
-import qualified Network.Info as NI
-import Data.ByteString.Char8 (pack)
-import Data.Fixed (div')
-import Data.Time.Clock.POSIX (getPOSIXTime)
-import Control.Applicative
-import Data.Monoid
-import Data.IORef
-import qualified Data.Map.Strict as Map
-
-fixmon :: IO MIBTree 
-fixmon = do
-    interfaces' <- interfaces
-    agentName <- newIORef $ String "fixmon snmp agent"
-    nodes <- newIORef $ Integer 1
-    dynT <- dynamicTree nodes
-    return $ fromList $ 
-      [ mkModule [1,3,6,1,4,1,44729] "enterprise" "Fixmon"
-      , mkObject 0 "Fixmon" "about" EmptyTree
-      , mkObjectType 0 "about" "name" (defaultContext (String "fixmon snmp agent")) (updateName agentName) 
-      , mkObjectType 1 "about" "version" (defaultContext (Integer 1)) Fixed
-      , mkObjectType 2 "about" "contexted" contextedValue Fixed
-      ] <> interfaces' <> dynT <> time 
-
-contextedValue :: ContextedValue
-contextedValue = Map.fromList [ ("context1", String "context1")
-                              , ("context2", String "context2")
-                              , ("", String "defalut")
-                              ]
-
-updateName :: IORef Value -> Update
-updateName agentName = ReadWrite (defaultContext <$> readIORef agentName) 
-                                 (commitSet agentName) 
-                                 (testSet agentName)
-                                 (undoSet agentName)
-
-commitSet :: IORef Value -> Maybe Context -> Value -> IO CommitError
-commitSet ioref _ v = do
-    writeIORef ioref v
-    return NoCommitError
-
-
-testSet :: IORef Value -> Maybe Context -> Value -> IO TestError
-testSet _ _ (String _) = return NoTestError
-testSet _ _ _ = return WrongType
-
-testSetInt :: IORef Value -> Maybe Context -> Value -> IO TestError
-testSetInt _ _ (Integer _) = return NoTestError
-testSetInt _ _ _ = return WrongType
-
-undoSet :: IORef Value -> Maybe Context -> Value -> IO UndoError
-undoSet _ _ _ = return NoUndoError
-
-dynamicTree :: IORef Value -> IO [MIB]
-dynamicTree nodes = do
-    Integer i <- readIORef nodes
-    return $  mkObject 1 "Fixmon" "dynamic" (DynTree (dynamicTree nodes )) : map addNode [0 .. fromIntegral i]
-    where
-    addNode :: Integer -> MIB
-    addNode 0 = mkObjectType 0 "dynamic" "counter" (defaultContext (Integer 0)) updateCounter
-    addNode i = mkObjectType i "dynamic" (show i) (defaultContext (Integer $ fromIntegral i)) Fixed
-    updateCounter = ReadWrite (defaultContext <$> readIORef nodes)
-                              (commitSet nodes)
-                              (testSetInt nodes)
-                              (undoSet nodes)
-
-
-
-time :: [MIB]
-time = 
-    [ mkObject 3 "Fixmon" "time" EmptyTree
-    , mkObjectType 0 "time" "description" (defaultContext (String "sysUptime")) Fixed
-    , mkObjectType 1 "time" "now"  (defaultContext (TimeTicks 0)) (Read fun)
-    ]
-    where
-    fun :: IO ContextedValue
-    fun = defaultContext . TimeTicks . flip div' 1 <$> getPOSIXTime
-
-interfaces :: IO [MIB]
-interfaces = do
-    nx <- getNetworkInterfaces
-    let xs = zip [0 .. fromIntegral $ length nx - 1] nx
-        indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" (defaultContext . Integer . fromIntegral $ i) Fixed
-        names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" (defaultContext . String . pack . NI.name $ o) Fixed
-        ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" (defaultContext . String . pack . show . NI.ipv4 $ o) Fixed
-        ipv6s = flip map xs $ \(i, o) -> mkObjectType i "ipv6s" "ipv6" (defaultContext . String . pack . show . NI.ipv6 $ o) Fixed
-        macs = flip map xs $ \(i, o) -> mkObjectType i "macs" "mac" (defaultContext . String . pack . show . NI.mac $ o) Fixed
-    return $ 
-        mkObject 2 "Fixmon" "interfaces" (DynTree interfaces) :
-          (mkObject 0 "interfaces" "indexes" EmptyTree : indexes) <>
-          (mkObject 1 "interfaces" "names"   EmptyTree : names )  <>
-          (mkObject 2 "interfaces" "ipv4s"   EmptyTree : ipv4s )  <>
-          (mkObject 3 "interfaces" "ipv6s"   EmptyTree : ipv6s )  <>
-          (mkObject 4 "interfaces" "macs"    EmptyTree : macs )
 
 main :: IO ()
-main = agent "/var/agentx/master" =<< fixmon
+main = agent "/var/agentx/master" [] simpleTree
 
---}

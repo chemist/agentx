@@ -5,7 +5,7 @@
 module Network.Protocol.Snmp.AgentX.MIBTree.Types where
 
 import Control.Monad.State.Strict 
--- import Control.Concurrent.MVar
+import Control.Concurrent.MVar
 import Data.Monoid ((<>))
 import Data.Foldable (foldMap)
 import Data.Label
@@ -34,6 +34,10 @@ rdValue = Read
 
 rwValue :: (Monad m, MonadIO m) => m Value -> (Value -> m CommitError) -> (Value -> m TestError) -> (Value -> m UndoError) -> PVal m
 rwValue = ReadWrite
+
+isWritable :: (Monad m, MonadIO m) => PVal m -> Bool
+isWritable ReadWrite{} = True
+isWritable _ = False
 
 instance (Monad m, MonadIO m) => Show (PVal m) where
     show Read{} = "Read Value"
@@ -69,18 +73,24 @@ data Module m a = Module
   { _zipper        :: Zipper Tree (ICV a)
   , _ou            :: Zipper Tree (ICV (Update m a))
   , _moduleOID     :: OID
+  , _findOid       :: OID
+  , _register      :: MVar [MIBM m]
+  , _unregister    :: MVar [MIBM m]
   } 
 
 mkLabel ''Module
 
 instance Show a => Show (Module m a) where
-    show (Module z ou' _) = show z ++ "\n" ++ show ou'
+    show (Module z ou' _ _ _ _) = show z ++ "\n" ++ show ou'
 
 
 type MIBTree m a = StateT (Module m a) m
 
-mkModule :: (Monad m, MonadIO m) => OID -> [MIB m a] -> Module m a
-mkModule moduleOid mibs = Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid
+mkModule :: (Monad m, MonadIO m) => OID -> [MIB m a] -> m (Module m a)
+mkModule moduleOid mibs = do
+    r <- liftIO $ newEmptyMVar
+    unr <- liftIO $ newEmptyMVar
+    return $ Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid [] r unr
 
 buildTree :: (Monad m, MonadIO m) => [MIB m a] -> (Tree (ICV a), Tree (ICV (Update m a)))
 buildTree ms = foldMap singleton $ fillOid ms

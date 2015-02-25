@@ -10,7 +10,6 @@ import Network.Socket.ByteString.Lazy (recv, send)
 import Control.Concurrent (killThread, threadDelay, ThreadId)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
-import Data.String (fromString)
 import Control.Applicative hiding (empty)
 import Control.Monad.State.Strict
 import Control.Monad.Reader
@@ -27,31 +26,31 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Label as DL
 import Prelude 
 
--- import Network.Protocol.Snmp (OID)
+import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Packet 
-import Network.Protocol.Snmp.AgentX.MIBTree
+import Network.Protocol.Snmp.AgentX.MIBTree hiding (register, unregister)
+import qualified Network.Protocol.Snmp.AgentX.MIBTree as MIBTree
 import Network.Protocol.Snmp.AgentX.Handlers
 import Network.Protocol.Snmp.AgentX.Types
 -- import Debug.Trace
 --
 
-agent :: String -> MIBTree -> IO ()
-agent path tree = bracket (openSocket path)
-                          close
-                          (runAgent tree)
+agent :: String -> OID -> [MIBM IO] -> IO ()
+agent path o tree = bracket (openSocket path)
+                            close
+                            (runAgent o tree)
                               
 openSocket :: String -> IO Socket
 openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path) >> return x
 
-runAgent :: MIBTree -> Socket -> IO ()
-runAgent tree socket'  = do
+runAgent :: OID -> [MIBM IO] -> Socket -> IO ()
+runAgent modOid tree socket'  = do
     hSetBuffering stdout LineBuffering
     s <- newMVar =<< getSysUptime
     i <- newEmptyMVar
     p <- newMVar minBound
-    reg <- newMVar (toList tree)
-    unreg <- newEmptyMVar
-    m <- newMVar (BST (toZipper tree) reg unreg)
+    mod' <- mkModule modOid tree 
+    m <- newMVar =<< flip execStateT mod' initAndRegister -- $ do
     ts <- newMVar Map.empty
     let st = ST s p m socket' i ts
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
@@ -70,7 +69,7 @@ runAgent tree socket'  = do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
     _ <-  getLine :: IO String
-    putMVar unreg (toList tree)
+--     putMVar unreg (toList tree)
     liftIO $ putStrLn "unregister all MIB"
     liftIO $ threadDelay 1000000
     void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, unregPid] -- p2,p3,p4,p5, 
@@ -153,41 +152,32 @@ _dp label = forever $ do
 register :: AgentT [Packet]
 register = do
     s <- mibs <$> ask
-    BST _ regMVar _  <- liftIO $ readMVar s
-    tree <- liftIO $ takeMVar regMVar
---    liftIO $ forM_ (sort tree) print 
---  let tree = toList zipper'
---     liftIO $ print $ concatMap mibToPackets $ filter isObjectType tree
-    return $ concatMap mibToPackets $ filter isObjectType tree
+    m  <- liftIO $ readMVar s
+    ls <- liftIO $ takeMVar (DL.get MIBTree.register m)
+    return $ map mibToPackets ls
         where
-        mibToPackets :: MIB -> [Packet]
+        mibToPackets :: MIBM IO -> Packet
         mibToPackets m =
-            let context = map contextToMContext $ Map.keys (val m)
-                contextToMContext "" = Nothing
-                contextToMContext x  = Just x
-                pduList = map (\x -> Register x minBound (toEnum 127) minBound (oid m) Nothing) context
-            in map (\x -> mkPacket x minBound minBound minBound) pduList
+            let pduList = Register (context m) minBound (toEnum 127) minBound (oi m) Nothing
+            in mkPacket pduList minBound minBound minBound
 
 unregister :: AgentT [Packet]
 unregister = do
     s <- mibs <$> ask
-    BST _ _ unregMVar <- liftIO $ readMVar s
-    tree <- liftIO $ takeMVar unregMVar
-    return $ concatMap mibToPackets $ filter isObjectType tree
+    m <- liftIO $ readMVar s
+    ls <- liftIO $ takeMVar (DL.get MIBTree.unregister m)
+    return $ map mibToPackets ls
         where
-        mibToPackets :: MIB -> [Packet]
+        mibToPackets :: MIBM IO -> Packet
         mibToPackets m =
-            let context = map contextToMContext $ Map.keys (val m)
-                contextToMContext "" = Nothing
-                contextToMContext x  = Just x
-                pduList = map (\x -> Unregister x (toEnum 127) minBound (oid m) Nothing) context
-            in map (\x -> mkPacket x minBound minBound minBound) pduList
+            let pduList = Unregister (context m) (toEnum 127) minBound (oi m) Nothing
+            in mkPacket pduList  minBound minBound minBound
 
 open :: AgentT Packet
 open = do
-    m <- mibs <$> ask
-    base <- head . toList . fst . zipper <$> (liftIO $ readMVar m)
-    let open' = Open minBound (oid base) ("Haskell AgentX sub-aagent: " <> fromString (name base))
+    s <- mibs <$> ask
+    m <- liftIO $ readMVar s
+    let open' = Open minBound (DL.get moduleOID m) ("Haskell AgentX sub-aagent")
     return $ mkPacket open' minBound minBound minBound 
 
 ping :: Packet

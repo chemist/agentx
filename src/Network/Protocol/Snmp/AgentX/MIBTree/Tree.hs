@@ -68,6 +68,7 @@ testTree = Node (0, Just "first") (Node (1, Just "second") Empty Empty) (Node (1
 
 instance Zippers Tree where
     toZipper t = (t, [])
+
     attach t (Empty, bs) = (t, bs)
     attach t (Node v next _, bs) = (Node v next t, bs)
 
@@ -100,7 +101,7 @@ instance Zippers Tree where
         gi (Node x _ _) = index x
         gi _ = error "oid"
 
-    setCursor [] _ z = Just z
+    setCursor [] _ z = Just (top z)
     setCursor ys c z = walk ys (top z)
       where
       giz (Node x _ _  , _) = (index x, context x)
@@ -123,5 +124,19 @@ hasLevel _ = True
 hasNext :: Zipper Tree a -> Bool
 hasNext (Node _ Empty _, _) = False
 hasNext _ = True
+
+goClosest :: HasIndex a => OID -> Maybe Context -> Zipper Tree a -> Zipper Tree a
+goClosest [] _ z = top z
+goClosest ys c z = walk ys (top z)
+  where
+  giz (Node x _ _, _) = (index x, context x)
+  giz _ = error "goClosest: giz Empty Tree"
+  walk [] z' = z'
+  walk (x : []) z'
+    | (x,c) == giz z' = z'
+    | otherwise = maybe (Empty, snd z') (walk (x : [])) (goNext z')
+  walk (x : xs) z'
+    | (x, c) == giz z' = maybe (Empty, snd z') (walk xs) (goLevel z')
+    | otherwise = maybe (Empty, snd z') (walk (x : xs)) (goNext z')
                       
 

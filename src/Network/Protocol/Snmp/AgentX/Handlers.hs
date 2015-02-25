@@ -5,14 +5,12 @@ import Control.Applicative
 import Control.Monad.State
 import Control.Monad.Reader
 import Control.Concurrent.MVar
-import qualified Data.Map.Strict as Map
 import qualified Data.Label as DL
 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Packet
 import Network.Protocol.Snmp.AgentX.Types
-import Network.Protocol.Snmp (Value(..))
 
 makePdu :: [Either TaggedError VarBind] -> AgentT (Maybe PDU)
 makePdu xs = do
@@ -43,6 +41,7 @@ route p = route' (DL.get pdu p) >>= return . fmap (flip (DL.set pdu) p)
     route' (Get mcontext oids) = makePdu =<< getHandler oids mcontext
     route' (GetNext mcontext srange) = makePdu =<< getNextHandler mcontext srange 
     route' (GetBulk mcontext nonRepeaters maxRepeaters srange) = makePdu =<< getBulkHandler mcontext nonRepeaters maxRepeaters srange 
+    {--
     route' (TestSet mcontext vbs) = do
         (updatesL, index, firstBad) <- splitByError <$> getUpdateList mcontext vbs
         tr <- transactions <$> ask
@@ -72,6 +71,7 @@ route p = route' (DL.get pdu p) >>= return . fmap (flip (DL.set pdu) p)
         liftIO $ print =<< readMVar tr
         liftIO . modifyMVar_ tr $ return . Map.delete (DL.get tid p) 
         return Nothing
+        --}
     
     route' _ = do
         liftIO $ print p
@@ -79,29 +79,25 @@ route p = route' (DL.get pdu p) >>= return . fmap (flip (DL.set pdu) p)
   
 
 getHandler :: [OID] -> Maybe Context -> AgentT [Either TaggedError VarBind]
-getHandler xs mc = fmap Right <$> (unContext mc <$> bridgeToBase (findMany xs))
+getHandler xs mc = do
+    rs <- bridgeToBase (findMany xs mc)
+    r <-  liftIO $ mapM mibToVarBind rs
+    return $ map Right r
 
-unContext :: Maybe Context -> [MIB] -> [VarBind]
-unContext _ [] = []
-unContext Nothing (x:xs) =
-    case Map.lookup "" (val x) of
-         Just v -> VarBind (oid x) v : unContext Nothing xs
-         Nothing -> unContext Nothing xs
-unContext (Just c) (x:xs) =
-    case (Map.lookup c (val x), Map.lookup "" (val x)) of
-         (Just v, _)                 -> VarBind (oid x) v : unContext (Just c) xs
-         (_     , Just EndOfMibView) -> VarBind (oid x) EndOfMibView : []
-         _ -> unContext (Just c) xs
 
 getNextHandler :: Maybe Context -> [SearchRange] -> AgentT [Either TaggedError VarBind]
-getNextHandler mc xs = map Right <$> (unContext mc <$> mapM (bridgeToBase . findNext) xs)
+getNextHandler _mc _xs = undefined -- map Right <$> mapM (bridgeToBase . findNext mc) xs
 
 getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> AgentT [Either TaggedError VarBind]
 getBulkHandler = undefined
 
+mibToVarBind :: MIBM IO -> IO VarBind
+mibToVarBind = undefined
+
+{--
 getUpdate :: Maybe Context -> VarBind -> AgentT (Either TaggedError Update)
-getUpdate mcontext (VarBind o v) = do
-    m <- bridgeToBase (findOne o)  
+getUpdate mc (VarBind o v) = do
+    m <- bridgeToBase (findOne mc o)  
     liftIO $ print m
     if (isWritable m)
        then do
@@ -129,3 +125,5 @@ setOne (VarBind oid' _value') = do
          (_, Fixed) -> return $ Left (Tagged NotWritable)
          (_, Read _) -> return $ Left (Tagged NotWritable)
          _ -> return $ Right m
+
+--}
