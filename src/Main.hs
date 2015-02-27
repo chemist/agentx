@@ -7,7 +7,6 @@ import Network.Protocol.Snmp.AgentX (Value(..))
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp.AgentX.Service
 import Network.Info
-import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.ByteString (ByteString)
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
@@ -15,7 +14,7 @@ import Data.Monoid ((<>))
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Applicative ((<$>))
-
+import Control.Monad.State
 
 pv1 :: PVal
 pv1 = rsValue (String "hello")
