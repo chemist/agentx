@@ -79,19 +79,16 @@ route p = route' (DL.get pdu p) >>= return . fmap (flip (DL.set pdu) p)
   
 
 getHandler :: [OID] -> Maybe Context -> AgentT [Either TaggedError VarBind]
-getHandler xs mc = do
-    rs <- bridgeToBase (findMany xs mc)
-    r <-  liftIO $ mapM mibToVarBind rs
-    return $ map Right r
+getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findMany xs mc))
 
 
 getNextHandler :: Maybe Context -> [SearchRange] -> AgentT [Either TaggedError VarBind]
-getNextHandler _mc _xs = undefined -- map Right <$> mapM (bridgeToBase . findNext mc) xs
+getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findManyNext xs mc))
 
 getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> AgentT [Either TaggedError VarBind]
 getBulkHandler = undefined
 
-mibToVarBind :: MIBM IO -> IO VarBind
+mibToVarBind :: (Monad m, MonadIO m, Functor m) => IMIB m -> m VarBind
 mibToVarBind m = do
     v <- readAIO (val m) 
     return $ VarBind (oi m) v

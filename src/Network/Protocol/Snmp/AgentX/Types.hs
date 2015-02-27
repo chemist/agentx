@@ -28,7 +28,7 @@ data TransactionState = TestSetT
 data ST = ST
   { sysuptime :: MVar SysUptime
   , packetCounter :: MVar PacketID
-  , mibs :: MVar (Module IO (PVal IO))
+  , mibs :: MVar (Module IO)
   , sock :: Socket
   , sessions :: MVar SessionID
   , transactions :: MVar (Map TransactionID Transaction)
@@ -37,7 +37,7 @@ data ST = ST
 type AgentT = ReaderT ST IO
 
 
-bridgeToBase :: MIBTree IO (PVal IO) a -> AgentT a
+bridgeToBase :: MIBTree IO a -> AgentT a
 bridgeToBase f = do
     st <- mibs <$> ask
     lift $ modifyMVar st $ \x -> swap <$> runStateT f x

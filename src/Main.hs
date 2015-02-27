@@ -1,11 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 module Main where
 
 import Network.Protocol.Snmp.AgentX (Value(..))
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp.AgentX.Service
 import Network.Info
+import Control.Monad.IO.Class (liftIO)
+import Data.ByteString (ByteString)
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
 import Data.Monoid ((<>))
@@ -14,50 +17,49 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Applicative ((<$>))
 
 
-pv1 :: PVal IO
+pv1 :: ValueM
 pv1 = rsValue (String "hello")
 
-pv2 :: PVal IO
+pv2 :: ValueM
 pv2 = rsValue (Integer 1)
 
-now :: PVal IO
-now = rdValue $  TimeTicks . flip div' 1 <$> getPOSIXTime
+str :: ByteString -> ValueM
+str x = rsValue (String x)
 
-subTree :: UpdateM IO 
+now :: ValueM
+now = rdValue $  TimeTicks . flip div' 1 <$> liftIO getPOSIXTime
+
+subTree :: UpdateM 
 subTree = Update (return ls)
   where
-    ls :: [MIBM IO]
     ls =
-        [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree"))
+        [ mkObjectType 0 "tree" "about" Nothing (str "subTree")
         , mkObjectType 1 "tree" "name" Nothing pv1
         , mkObject 2 "tree" "sub" (Just subTree1)
         , mkObject 3 "tree" "sub" (Just subTree2)
         ]
 
-subTree1 :: UpdateM IO
+subTree1 :: UpdateM 
 subTree1 = Update (return ls)
   where
-    ls :: [MIBM IO]
     ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree1"))
          , mkObjectType 1 "tree" "name" Nothing now
          , mkObject 2 "tree" "sub" (Just subTree2)
          ]
 
-subTree2 :: UpdateM IO
+subTree2 :: UpdateM 
 subTree2 = Update (return ls)
   where
-    ls :: [MIBM IO]
     ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree2"))
          , mkObjectType 1 "tree" "name" Nothing pv1
          ]
 
-interfaces :: UpdateM IO 
+interfaces :: UpdateM 
 interfaces = Update ifaces
     where 
     ifaces = do
-        nx <- getNetworkInterfaces
+        nx <- liftIO $ getNetworkInterfaces
         let xs = zip [0 .. fromIntegral $ length nx - 1] nx
-            indexes, names, ipv4s, ipv6s, macs :: [MIBM IO]
             indexes = flip map xs $ \(i,_) -> mkObjectType i "indexes" "index" Nothing (rsValue . Integer . fromIntegral $ i) 
             names = flip map xs $ \(i, o) -> mkObjectType i "names" "name" Nothing (rsValue . String . pack . NI.name $ o) 
             ipv4s = flip map xs $ \(i, o) -> mkObjectType i "ipv4s" "ipv4" Nothing (rsValue . String . pack . show . NI.ipv4 $ o) 
@@ -70,7 +72,7 @@ interfaces = Update ifaces
               (mkObject 3 "interfaces" "ipv6s"   Nothing : ipv6s)   <>
               (mkObject 4 "interfaces" "macs"    Nothing : macs) 
 
-simpleTree :: [MIBM IO]
+simpleTree :: [IMIB IO]
 simpleTree = 
       [ mkObject 0 "Fixmon" "about" Nothing
       , mkObjectType 0 "about" "name" Nothing $ rsValue (String "Fixmon agent")

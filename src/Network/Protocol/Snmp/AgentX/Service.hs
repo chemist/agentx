@@ -35,7 +35,7 @@ import Network.Protocol.Snmp.AgentX.Types
 -- import Debug.Trace
 --
 
-agent :: String -> OID -> [MIBM IO] -> IO ()
+agent :: String -> OID -> [IMIB IO] -> IO ()
 agent path o tree = bracket (openSocket path)
                             close
                             (runAgent o tree)
@@ -43,7 +43,7 @@ agent path o tree = bracket (openSocket path)
 openSocket :: String -> IO Socket
 openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path) >> return x
 
-runAgent :: OID -> [MIBM IO] -> Socket -> IO ()
+runAgent :: OID -> [IMIB IO] -> Socket -> IO ()
 runAgent modOid tree socket'  = do
     hSetBuffering stdout LineBuffering
     s <- newMVar =<< getSysUptime
@@ -156,7 +156,7 @@ register = do
     ls <- liftIO $ takeMVar (DL.get MIBTree.register m)
     return $ map mibToPackets ls
         where
-        mibToPackets :: MIBM IO -> Packet
+        mibToPackets :: IMIB IO -> Packet
         mibToPackets m =
             let pduList = Register (context m) minBound (toEnum 127) minBound (oi m) Nothing
             in mkPacket pduList minBound minBound minBound
@@ -168,7 +168,7 @@ unregister = do
     ls <- liftIO $ takeMVar (DL.get MIBTree.unregister m)
     return $ map mibToPackets ls
         where
-        mibToPackets :: MIBM IO -> Packet
+        mibToPackets :: IMIB IO -> Packet
         mibToPackets m =
             let pduList = Unregister (context m) (toEnum 127) minBound (oi m) Nothing
             in mkPacket pduList  minBound minBound minBound

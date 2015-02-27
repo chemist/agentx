@@ -29,21 +29,20 @@ class Zippers b where
     goBack  :: Zipper b a -> Maybe (Zipper b a)
     goUp    :: Zipper b a -> Maybe (Zipper b a)
     top     :: Zipper b a -> Zipper b a
-    oid     :: HasIndex a => Zipper b a -> OID
-    cursor  :: HasIndex a => Zipper b a -> Maybe (Integer, Maybe Context)
-    setCursor :: HasIndex a => OID -> Maybe Context -> Zipper b a -> Maybe (Zipper b a)
-
-class HasIndex a where
-    index :: a -> Integer
-    withValue :: a -> Bool
-    context :: a -> Maybe Context
-    
+    oid     :: Contexted a => Zipper b a -> OID
+    cursor  :: Contexted a => Zipper b a -> Maybe (Integer, Maybe Context)
+    setCursor :: Contexted a => OID -> Maybe Context -> Zipper b a -> Maybe (Zipper b a)
 
 data Tree a = Node a (Tree a) (Tree a)
             | Empty
             deriving (Functor, Eq)
 
-instance HasIndex a => Monoid (Tree a) where
+class Contexted a where
+    index :: a -> Integer
+    context :: a -> Maybe Context
+    withValue :: a -> Bool
+
+instance Contexted a => Monoid (Tree a) where
     mempty = Empty
     mappend a Empty = a
     mappend Empty a = a
@@ -52,7 +51,7 @@ instance HasIndex a => Monoid (Tree a) where
        | otherwise = Node v (next <> x) link 
 
 
-instance (HasIndex a, Show a) => Show (Tree a) where
+instance (Contexted a, Show a) => Show (Tree a) where
     show f = unlines $ drawLevel f
       where
         drawLevel Empty = []
@@ -96,7 +95,7 @@ instance Zippers Tree where
       where 
         fun xs (Next{}) = xs
         fun xs (Level x) = gi x : xs
-        gi :: HasIndex a => Tree a -> Integer
+        gi :: Contexted a => Tree a -> Integer
         gi (Node x _ _) = index x
         gi _ = error "oid"
 
@@ -124,7 +123,7 @@ hasNext :: Zipper Tree a -> Bool
 hasNext (Node _ Empty _, _) = False
 hasNext _ = True
 
-goClosest :: HasIndex a => OID -> Maybe Context -> Zipper Tree a -> Zipper Tree a
+goClosest :: Contexted a => OID -> Maybe Context -> Zipper Tree a -> Zipper Tree a
 goClosest [] _ z = top z
 goClosest ys c z = walk ys (top z)
   where

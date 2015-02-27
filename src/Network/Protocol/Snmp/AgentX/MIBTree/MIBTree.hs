@@ -18,10 +18,10 @@ import Data.Label.Monadic
 import Control.Category ((.))
 import Prelude hiding ((.))
 
-initModule :: (Show a, Monad m, MonadIO m, Functor m) =>  MIBTree m a ()
+initModule :: (Monad m, MonadIO m, Functor m) =>  MIBTree m ()
 initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou  
     where
-    evalTree :: (Show a, Monad m, MonadIO m, Functor m) => MIB m a -> MIBTree m a ()
+    evalTree :: (Monad m, MonadIO m, Functor m) => IMIB m -> MIBTree m ()
     evalTree obj = do
         (mibs, updates) <- buildTree <$> (lift $ unUpdate . fromJust . update $ obj)
         case updates of
@@ -40,58 +40,58 @@ initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou
                 modify zipper $ top . attach z
                 modify ou $ top . attach o
 
-initAndRegister :: (Monad m, MonadIO m, Functor m) => MIBTree m (PVal m) ()
+initAndRegister :: (Monad m, MonadIO m, Functor m) => MIBTree m ()
 initAndRegister = do
     initModule
     Module z _ b _ mv _<- get 
     liftIO $ putMVar mv (addBaseOid b $ toRegistrationList z)
 
-addBaseOid :: (Monad m, MonadIO m, Functor m) =>  OID -> [MIBM m] -> [MIBM m]
+addBaseOid :: (Monad m, MonadIO m, Functor m) =>  OID -> [IMIB m] -> [IMIB m]
 addBaseOid b = map fun
     where
     fun (ObjectType o i _ _ c v) = ObjectType (b <> o) i "" "" c v
     fun _ = error "only objectType can be registered"
 
-toUpdateList :: Zipper Tree (ICV (Update m a)) -> [MIB m a]
+toUpdateList :: Zipper Tree (IUpdate m) -> [IMIB m]
 toUpdateList (Empty, _) = []
 toUpdateList (t, _) = toUpdateList' ([], t)
   where
-  toUpdateList' :: (OID, Tree (ICV (Update m a))) -> [MIB m a]
+  toUpdateList' :: (OID, Tree (IUpdate m)) -> [IMIB m]
   toUpdateList' (o, Node x next level) = 
       if withValue x
-         then Object (reverse $ index x : o) (index x) "" "" (valueFromICV x) 
+         then Object (reverse $ index x : o) (index x) "" "" (valueFromContexted x) 
               : toUpdateList' (o, next) 
               <> toUpdateList' (index x : o, level)
          else toUpdateList' (o, next)
               <> toUpdateList' (index x : o, level)
   toUpdateList' _ = []
-  valueFromICV (ICV (_, _, x)) = x
+  valueFromContexted (Contexted (_, _, x)) = x
 
-toRegistrationList :: Zipper Tree (ICV a) -> [MIB m a]
+toRegistrationList :: Zipper Tree (IValue m) -> [IMIB m]
 toRegistrationList (Empty, _) = []
 toRegistrationList (t, _)  = toRegistrationList' ([], t)
   where
-  toRegistrationList' :: (OID, Tree (ICV a)) -> [MIB m a]
+  toRegistrationList' :: (OID, Tree (IValue m)) -> [IMIB m]
   toRegistrationList' (o, Node x next level) = 
       if withValue x
-         then ObjectType (reverse $ index x : o) (index x) "" "" (context x) (valueFromICV x)
+         then ObjectType (reverse $ index x : o) (index x) "" "" (context x) (valueFromContexted x)
               : toRegistrationList' (o, next)
               <> toRegistrationList' (index x : o, level)
          else toRegistrationList' (o, next)
               <> toRegistrationList' (index x : o, level)
   toRegistrationList' _ = []
-  valueFromICV (ICV (_, _, Just x)) = x
-  valueFromICV _ = error "toRegistrationList: Opps, you found bug!!!"
+  valueFromContexted (Contexted (_, _, Just x)) = x
+  valueFromContexted _ = error "toRegistrationList: Opps, you found bug!!!"
                                            
 
-inRange :: (Monad m, MonadIO m, Functor m) => SearchRange -> MIBM m -> MIBM m 
+inRange :: (Monad m, MonadIO m, Functor m) => SearchRange -> IMIB m -> IMIB m 
 inRange s m =
     if (L.get startOID s) <= oi m && oi m < (L.get endOID s)
         then ObjectType (oi m) 0 "" "" Nothing (val m)
         else ObjectType (L.get startOID s) 0 "" "" Nothing (rsValue EndOfMibView)
 
 
-findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m (PVal m) (MIBM m)
+findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m (IMIB m)
 findOne ys mcontext = do
     -- init zippers
     modify zipper top
@@ -111,7 +111,7 @@ findOne ys mcontext = do
              -- find
              findOne' ys' 
     where
-      findOne' :: (Monad m, MonadIO m, Functor m) => OID -> MIBTree m (PVal m) (MIBM m)
+      findOne' :: (Monad m, MonadIO m, Functor m) => OID -> MIBTree m (IMIB m)
       findOne' [] = return $ ObjectType ys 0 "" "" Nothing nsi
       findOne' (x : []) = do
           Just ic <- cursor <$> gets zipper 
@@ -140,11 +140,11 @@ findOne ys mcontext = do
       nso = rsValue NoSuchObject
       nsi = rsValue NoSuchInstance
 
-      getValueFromHead :: Zipper Tree (ICV a) -> Maybe a
-      getValueFromHead (Node (ICV (_, _, v)) _ Empty, _) = v
+      getValueFromHead :: Zipper Tree (ContextedValue a) -> Maybe a
+      getValueFromHead (Node (Contexted (_, _, v)) _ Empty, _) = v
       getValueFromHead _ = Nothing
 
-      updateSubtree :: HasIndex a => OID -> Zipper Tree a -> Zipper Tree a
+      updateSubtree :: Contexted a => OID -> Zipper Tree a -> Zipper Tree a
       updateSubtree xs z =
           let (x, u) = goClosest xs Nothing z
               isLevel (Level _) = True
@@ -155,9 +155,12 @@ findOne ys mcontext = do
               cleanHead (Node v _ l) = Node v Empty l
           in top (cleanHead x, map cleanUnused $ filter isLevel u)
 
-findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m (PVal m) [MIBM m]
+findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [IMIB m]
 findMany xs mc = mapM (flip findOne mc) xs
 
-findNext :: SearchRange -> Maybe Context -> MIBTree m a (MIB m a)
+findNext :: (Monad m, MonadIO m, Functor m) => SearchRange -> Maybe Context -> MIBTree m (IMIB m)
 findNext = undefined
+
+findManyNext :: (Monad m, MonadIO m, Functor m) => [SearchRange] -> Maybe Context -> MIBTree m [IMIB m]
+findManyNext xs mc = mapM (flip findNext mc) xs
 
