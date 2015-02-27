@@ -4,9 +4,8 @@ module Network.Protocol.Snmp.AgentX.MIBTree.MIBTree where
 import Data.Maybe 
 import Control.Applicative
 import Control.Monad.State.Strict (MonadIO, forM_, lift, get, put, liftIO)
-import Network.Protocol.Snmp.AgentX.MIBTree.Types 
+import Network.Protocol.Snmp.AgentX.MIBTree.Types hiding (context)
 import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
-import Network.Protocol.Snmp.AgentX.MIBTree.MIB  hiding (context)
 import Network.Protocol.Snmp (OID, Value(EndOfMibView, NoSuchInstance, NoSuchObject))
 import Network.Protocol.Snmp.AgentX.Packet (Context, SearchRange, startOID, endOID)
 import Control.Concurrent.MVar
@@ -21,7 +20,7 @@ import Prelude hiding ((.))
 initModule :: (Monad m, MonadIO m, Functor m) =>  MIBTree m ()
 initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou  
     where
-    evalTree :: (Monad m, MonadIO m, Functor m) => IMIB m -> MIBTree m ()
+    evalTree :: (Monad m, MonadIO m, Functor m) => MIB -> MIBTree m ()
     evalTree obj = do
         (mibs, updates) <- buildTree <$> (lift $ unUpdate . fromJust . update $ obj)
         case updates of
@@ -46,17 +45,17 @@ initAndRegister = do
     Module z _ b _ mv _<- get 
     liftIO $ putMVar mv (addBaseOid b $ toRegistrationList z)
 
-addBaseOid :: (Monad m, MonadIO m, Functor m) =>  OID -> [IMIB m] -> [IMIB m]
+addBaseOid :: OID -> [MIB] -> [MIB]
 addBaseOid b = map fun
     where
     fun (ObjectType o i _ _ c v) = ObjectType (b <> o) i "" "" c v
     fun _ = error "only objectType can be registered"
 
-toUpdateList :: Zipper Tree (IUpdate m) -> [IMIB m]
+toUpdateList :: Zipper Tree IUpdate  -> [MIB]
 toUpdateList (Empty, _) = []
 toUpdateList (t, _) = toUpdateList' ([], t)
   where
-  toUpdateList' :: (OID, Tree (IUpdate m)) -> [IMIB m]
+  toUpdateList' :: (OID, Tree IUpdate) -> [MIB]
   toUpdateList' (o, Node x next level) = 
       if withValue x
          then Object (reverse $ index x : o) (index x) "" "" (valueFromContexted x) 
@@ -67,11 +66,11 @@ toUpdateList (t, _) = toUpdateList' ([], t)
   toUpdateList' _ = []
   valueFromContexted (Contexted (_, _, x)) = x
 
-toRegistrationList :: Zipper Tree (IValue m) -> [IMIB m]
+toRegistrationList :: Zipper Tree IValue  -> [MIB]
 toRegistrationList (Empty, _) = []
 toRegistrationList (t, _)  = toRegistrationList' ([], t)
   where
-  toRegistrationList' :: (OID, Tree (IValue m)) -> [IMIB m]
+  toRegistrationList' :: (OID, Tree IValue) -> [MIB]
   toRegistrationList' (o, Node x next level) = 
       if withValue x
          then ObjectType (reverse $ index x : o) (index x) "" "" (context x) (valueFromContexted x)
@@ -84,14 +83,14 @@ toRegistrationList (t, _)  = toRegistrationList' ([], t)
   valueFromContexted _ = error "toRegistrationList: Opps, you found bug!!!"
                                            
 
-inRange :: (Monad m, MonadIO m, Functor m) => SearchRange -> IMIB m -> IMIB m 
+inRange :: SearchRange -> MIB -> MIB  
 inRange s m =
     if (L.get startOID s) <= oi m && oi m < (L.get endOID s)
         then ObjectType (oi m) 0 "" "" Nothing (val m)
         else ObjectType (L.get startOID s) 0 "" "" Nothing (rsValue EndOfMibView)
 
 
-findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m (IMIB m)
+findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m MIB 
 findOne ys mcontext = do
     -- init zippers
     modify zipper top
@@ -111,7 +110,7 @@ findOne ys mcontext = do
              -- find
              findOne' ys' 
     where
-      findOne' :: (Monad m, MonadIO m, Functor m) => OID -> MIBTree m (IMIB m)
+      findOne' :: (Monad m, MonadIO m, Functor m) => OID -> MIBTree m MIB 
       findOne' [] = return $ ObjectType ys 0 "" "" Nothing nsi
       findOne' (x : []) = do
           Just ic <- cursor <$> gets zipper 
@@ -136,7 +135,7 @@ findOne ys mcontext = do
                    findOne' (x : xs) 
                _ -> return $ ObjectType ys x "" "" mcontext nso
 
-      nso, nsi :: (Monad m, MonadIO m, Functor m) => PVal m
+      nso, nsi :: PVal 
       nso = rsValue NoSuchObject
       nsi = rsValue NoSuchInstance
 
@@ -155,12 +154,12 @@ findOne ys mcontext = do
               cleanHead (Node v _ l) = Node v Empty l
           in top (cleanHead x, map cleanUnused $ filter isLevel u)
 
-findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [IMIB m]
+findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [MIB]
 findMany xs mc = mapM (flip findOne mc) xs
 
-findNext :: (Monad m, MonadIO m, Functor m) => SearchRange -> Maybe Context -> MIBTree m (IMIB m)
+findNext :: (Monad m, MonadIO m, Functor m) => SearchRange -> Maybe Context -> MIBTree m MIB
 findNext = undefined
 
-findManyNext :: (Monad m, MonadIO m, Functor m) => [SearchRange] -> Maybe Context -> MIBTree m [IMIB m]
+findManyNext :: (Monad m, MonadIO m, Functor m) => [SearchRange] -> Maybe Context -> MIBTree m [MIB]
 findManyNext xs mc = mapM (flip findNext mc) xs
 

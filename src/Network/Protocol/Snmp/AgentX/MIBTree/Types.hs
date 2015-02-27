@@ -1,7 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE RankNTypes #-}
 module Network.Protocol.Snmp.AgentX.MIBTree.Types where
 
 import Control.Monad.State.Strict 
@@ -11,48 +11,48 @@ import Data.Foldable (foldMap)
 import Data.Label
 
 import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
-import Network.Protocol.Snmp.AgentX.MIBTree.MIB 
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError)
 
 
-data PVal m = Read 
-            { readAIO        :: m Value 
+data PVal = Read 
+            { readAIO        :: IO Value 
             }
           | ReadWrite 
-            { readAIO        :: m Value
-            , commitSetAIO   :: Value -> m CommitError
-            , testSetAIO     :: Value -> m TestError
-            , undoSetAIO     :: Value -> m UndoError
+            { readAIO        :: IO Value
+            , commitSetAIO   :: Value -> IO CommitError
+            , testSetAIO     :: Value -> IO TestError
+            , undoSetAIO     :: Value -> IO UndoError
             }
 
-rsValue :: (Monad m, MonadIO m, Functor m) => Value -> PVal m
-rsValue v = Read $ return v
-
-rdValue :: (Monad m, MonadIO m, Functor m) => m Value -> PVal m
-rdValue = Read
-
-rwValue :: (Monad m, MonadIO m, Functor m) => m Value -> (Value -> m CommitError) -> (Value -> m TestError) -> (Value -> m UndoError) -> PVal m
-rwValue = ReadWrite
-
-isWritable :: (Monad m, MonadIO m, Functor m) => PVal m -> Bool
-isWritable ReadWrite{} = True
-isWritable _ = False
-
-instance (Monad m, MonadIO m, Functor m) => Show (PVal m) where
+instance Show PVal where
     show Read{} = "Read Value"
     show ReadWrite{} = "ReadWrite Value"
 
+type Parent = String
+type Name   = String
 
-type IMIB m = MIB m (PVal m)
+data MIB = Object
+    { oi :: OID
+    , int :: Integer
+    , parent :: Parent
+    , name  :: Name
+    , update :: Maybe Update 
+    }      | ObjectType
+    { oi :: OID
+    , int :: Integer
+    , parent :: Parent
+    , name :: Name
+    , context :: Maybe Context
+    , val :: PVal 
+    }
 
--- newtype ICV a = ICV (Integer, Maybe Context, Maybe a) 
+deriving instance Show MIB 
+
+instance Show Update  where
+    show _ = "Update Subtree Fun"
+
 newtype ContextedValue a = Contexted { unContext :: (Integer, Maybe Context, Maybe a) }
-
-type IValue m = ContextedValue (PVal m) 
-type IUpdate m = ContextedValue (Update m (PVal m))
-
-type IVal m = m (PVal m)
 
 instance Contexted (ContextedValue a) where
     index (Contexted (i, _, _)) = i
@@ -60,49 +60,46 @@ instance Contexted (ContextedValue a) where
     withValue (Contexted (_, _, Just _)) = True
     withValue _ = False
 
-toC :: Integer -> Maybe Context -> Maybe a -> ContextedValue a
-toC i mc mv = Contexted (i, mc, mv)
-
-zero :: Integer -> ContextedValue a
-zero i = Contexted (i, Nothing, Nothing)
-
 instance Show a => Show (ContextedValue a) where
     show (Contexted (_, Nothing, Nothing)) = "- node -"
     show (Contexted (_, Nothing, Just v)) = "- leaf " <> show v
     show (Contexted (_, Just c, Just v)) = "- contexted leaf " <> show c <> show v
     show _ = "bad node"
 
+newtype Update = Update { unUpdate ::forall  m . (Monad m, MonadIO m, Functor m) =>  m [MIB]}
 
-data Module m = Module
-  { _zipper        :: Zipper Tree (IValue m)
-  , _ou            :: Zipper Tree (IUpdate m)
+type IValue = ContextedValue PVal  
+type IUpdate = ContextedValue Update 
+
+data Module = Module
+  { _zipper        :: Zipper Tree IValue 
+  , _ou            :: Zipper Tree IUpdate
   , _moduleOID     :: OID
   , _findOid       :: OID
-  , _register      :: MVar [IMIB m]
-  , _unregister    :: MVar [IMIB m]
+  , _register      :: MVar [MIB]
+  , _unregister    :: MVar [MIB]
   } 
 
 mkLabel ''Module
 
-instance (Monad m, MonadIO m, Functor m) => Show (Module m) where
+instance Show Module where
     show (Module z ou' _ _ _ _) = show z ++ "\n" ++ show ou'
 
+type MIBTree = StateT Module  
 
-type MIBTree m = StateT (Module m) m
-
-mkModule :: (Monad m, MonadIO m, Functor m) => OID -> [IMIB m] -> m (Module m)
+mkModule :: (Monad m, MonadIO m, Functor m) => OID -> [MIB] -> m Module 
 mkModule moduleOid mibs = do
     r <- liftIO $ newEmptyMVar
     unr <- liftIO $ newEmptyMVar
     return $ Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid [] r unr
 
-buildTree :: (Monad m, MonadIO m, Functor m) => [IMIB m] -> (Tree (IValue m), Tree (IUpdate m))
+buildTree :: [MIB] -> (Tree IValue, Tree IUpdate)
 buildTree ms = foldMap singleton $ fillOid ms
   where
-    singleton :: (Monad m, MonadIO m) => IMIB m -> (Tree (IValue m), Tree (IUpdate m))
+    singleton :: MIB -> (Tree IValue , Tree IUpdate)
     singleton m = singleton' (oi m, m)
       where
-        singleton' :: (OID, IMIB m) -> (Tree (IValue m), Tree (IUpdate m))
+        singleton' :: (OID, MIB) -> (Tree IValue, Tree IUpdate)
         singleton' ([],  _) = (Empty, Empty)
         singleton' ([_], Object _ i _ _ Nothing) = (Node (zero i) Empty Empty, Empty )
         singleton' ([_], Object _ i _ _ u@_) = (Node (zero i) Empty Empty, Node (toC i Nothing u) Empty Empty )
@@ -110,5 +107,66 @@ buildTree ms = foldMap singleton $ fillOid ms
         singleton' ((i:xs), obj@(Object _ _ _ _ Nothing)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
         singleton' ((i:xs), obj@(Object _ _ _ _ _)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Node (zero i) Empty (snd $ singleton' (xs, obj)))
         singleton' ((i:xs), obj@(ObjectType{})) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
+
+isObjectType :: MIB -> Bool
+isObjectType (ObjectType{}) = True
+isObjectType _ = False
+
+mkObject :: Integer -> Parent -> Name -> Maybe Update -> MIB  
+mkObject = Object [] 
+
+mkObjectType :: Integer -> Parent -> Name -> Maybe Context -> PVal -> MIB  
+mkObjectType = ObjectType []
+
+fillOid :: [MIB ] -> [MIB ]
+fillOid [] = []
+fillOid (ObjectType o i p n v u : xs) 
+  | o == [] = ObjectType [i] i p n v u : mkOid' [(p, []), (n, [i])] xs
+  | otherwise = ObjectType o i p n v u : mkOid' [(p, []), (n, o)] xs
+  where
+    mkOid' :: [(Parent, OID)] -> [MIB ] -> [MIB ]
+    mkOid' _ [] = []
+    mkOid' base (y:ys) =
+        let Just prev = lookup (parent y) base
+            newbase = (name y, prev <> [int y]) : base
+        in addOid prev y : mkOid' newbase ys
+    addOid :: OID -> MIB -> MIB 
+    addOid o' (Object _ i' p' n' u') = Object (o' <> [i']) i' p' n' u'
+    addOid o' (ObjectType _ i' p' n' v' u') = ObjectType (o' <> [i']) i' p' n' v' u'
+fillOid (Object o i p n u : xs) 
+  | o == [] = Object [i] i p n u :  mkOid' [(p, []), (n, [i])] xs
+  | otherwise = Object o i p n u : mkOid' [(p, []), (n, o)] xs
+  where
+    mkOid' :: [(Parent, OID)] -> [MIB ] -> [MIB ]
+    mkOid' _ [] = []
+    mkOid' base (y:ys) =
+        let Just prev = lookup (parent y) base
+            newbase = (name y, prev <> [int y]) : base
+        in addOid prev y : mkOid' newbase ys
+    addOid :: OID -> MIB  -> MIB  
+    addOid o' (Object _ i' p' n' u') = Object (o' <> [i']) i' p' n' u'
+    addOid o' (ObjectType _ i' p' n' v' u') = ObjectType (o' <> [i']) i' p' n' v' u'
+
+
+
+rsValue :: Value -> PVal 
+rsValue v = Read $ return v
+
+rdValue :: IO Value -> PVal 
+rdValue = Read   
+
+rwValue :: IO Value -> (Value -> IO CommitError) -> (Value -> IO TestError) -> (Value -> IO UndoError) -> PVal 
+rwValue = ReadWrite
+
+isWritable :: PVal -> Bool
+isWritable ReadWrite{} = True
+isWritable _ = False
+
+toC :: Integer -> Maybe Context -> Maybe a -> ContextedValue a
+toC i mc mv = Contexted (i, mc, mv)
+
+zero :: Integer -> ContextedValue a
+zero i = Contexted (i, Nothing, Nothing)
+
 
 

@@ -88,9 +88,9 @@ getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBas
 getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> AgentT [Either TaggedError VarBind]
 getBulkHandler = undefined
 
-mibToVarBind :: (Monad m, MonadIO m, Functor m) => IMIB m -> m VarBind
+mibToVarBind :: (Monad m, MonadIO m, Functor m) => MIB -> m VarBind
 mibToVarBind m = do
-    v <- readAIO (val m) 
+    v <- liftIO $ readAIO (val m) 
     return $ VarBind (oi m) v
 
 {--

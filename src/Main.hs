@@ -7,7 +7,7 @@ import Network.Protocol.Snmp.AgentX (Value(..))
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp.AgentX.Service
 import Network.Info
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.ByteString (ByteString)
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
@@ -17,19 +17,19 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Applicative ((<$>))
 
 
-pv1 :: ValueM
+pv1 :: PVal
 pv1 = rsValue (String "hello")
 
-pv2 :: ValueM
+pv2 :: PVal
 pv2 = rsValue (Integer 1)
 
-str :: ByteString -> ValueM
+str :: ByteString -> PVal
 str x = rsValue (String x)
 
-now :: ValueM
+now :: PVal
 now = rdValue $  TimeTicks . flip div' 1 <$> liftIO getPOSIXTime
 
-subTree :: UpdateM 
+subTree :: Update 
 subTree = Update (return ls)
   where
     ls =
@@ -39,7 +39,7 @@ subTree = Update (return ls)
         , mkObject 3 "tree" "sub" (Just subTree2)
         ]
 
-subTree1 :: UpdateM 
+subTree1 :: Update 
 subTree1 = Update (return ls)
   where
     ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree1"))
@@ -47,16 +47,17 @@ subTree1 = Update (return ls)
          , mkObject 2 "tree" "sub" (Just subTree2)
          ]
 
-subTree2 :: UpdateM 
+subTree2 :: Update 
 subTree2 = Update (return ls)
   where
     ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree2"))
          , mkObjectType 1 "tree" "name" Nothing pv1
          ]
 
-interfaces :: UpdateM 
+interfaces :: Update 
 interfaces = Update ifaces
     where 
+    ifaces :: (Monad m, MonadIO m, Functor m) => m [MIB]
     ifaces = do
         nx <- liftIO $ getNetworkInterfaces
         let xs = zip [0 .. fromIntegral $ length nx - 1] nx
@@ -72,7 +73,7 @@ interfaces = Update ifaces
               (mkObject 3 "interfaces" "ipv6s"   Nothing : ipv6s)   <>
               (mkObject 4 "interfaces" "macs"    Nothing : macs) 
 
-simpleTree :: [IMIB IO]
+simpleTree :: [MIB]
 simpleTree = 
       [ mkObject 0 "Fixmon" "about" Nothing
       , mkObjectType 0 "about" "name" Nothing $ rsValue (String "Fixmon agent")
