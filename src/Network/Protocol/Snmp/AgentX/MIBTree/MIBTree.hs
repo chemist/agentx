@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Network.Protocol.Snmp.AgentX.MIBTree.MIBTree where
 
 import Data.Maybe 
@@ -7,7 +8,7 @@ import Control.Monad.State.Strict (MonadIO, forM_, lift, get, put, liftIO)
 import Network.Protocol.Snmp.AgentX.MIBTree.Types hiding (context)
 import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
 import Network.Protocol.Snmp (OID, Value(EndOfMibView, NoSuchInstance, NoSuchObject))
-import Network.Protocol.Snmp.AgentX.Packet (Context, SearchRange, startOID, endOID)
+import Network.Protocol.Snmp.AgentX.Packet (Context, SearchRange, startOID, endOID, include)
 import Control.Concurrent.MVar
 import qualified Data.Label as L
 import Data.List (stripPrefix)
@@ -16,6 +17,7 @@ import Data.Monoid
 import Data.Label.Monadic
 import Control.Category ((.))
 import Prelude hiding ((.))
+-- import Debug.Trace
 
 initModule :: (Monad m, MonadIO m, Functor m) =>  MIBTree m ()
 initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou  
@@ -43,6 +45,7 @@ initAndRegister :: (Monad m, MonadIO m, Functor m) => MIBTree m ()
 initAndRegister = do
     initModule
     Module z _ b _ mv _<- get 
+    liftIO $ print z
     liftIO $ putMVar mv (addBaseOid b $ toRegistrationList z)
 
 addBaseOid :: OID -> [MIB] -> [MIB]
@@ -86,8 +89,8 @@ toRegistrationList (t, _)  = toRegistrationList' ([], t)
 inRange :: SearchRange -> MIB -> MIB  
 inRange s m =
     if (L.get startOID s) <= oi m && oi m < (L.get endOID s)
-        then ObjectType (oi m) 0 "" "" Nothing (val m)
-        else ObjectType (L.get startOID s) 0 "" "" Nothing (rsValue EndOfMibView)
+        then ObjectType (oi m) (last $ oi m) "" "" Nothing (val m)
+        else ObjectType (L.get startOID s) (last $ L.get startOID s) "" "" Nothing (rsValue EndOfMibView)
 
 
 findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m MIB 
@@ -108,57 +111,102 @@ findOne ys mcontext = do
              -- get back full update tree
              puts ou updates
              -- find
-             findOne' ys' 
+             findOne' ys' <$> gets zipper
     where
-      findOne' :: (Monad m, MonadIO m, Functor m) => OID -> MIBTree m MIB 
-      findOne' [] = return $ ObjectType ys 0 "" "" Nothing nsi
-      findOne' (x : []) = do
-          Just ic <- cursor <$> gets zipper 
-          maybeValue <- getValueFromHead <$> gets zipper 
-          isNext <- hasNext <$> gets zipper
-          case (ic == (x, mcontext), isNext) of
-               (True, _) -> return $ ObjectType ys x "" "" mcontext (fromMaybe nso maybeValue)
-               (False, True) -> do
-                   modify zipper (fromJust . goNext) 
-                   findOne' (x : []) 
-               _ -> return $ ObjectType ys x "" "" mcontext nsi
-      findOne' (x : xs) = do
-          isNextZipper <- hasNext <$> gets zipper
-          isLevelZipper <- hasLevel <$> gets zipper
-          Just (i, _) <- cursor <$> gets zipper 
-          case (i == x, isNextZipper, isLevelZipper) of
-               (True, _, True) -> do
-                   modify zipper (fromJust . goLevel) 
-                   findOne' xs 
-               (False, True, _) -> do
-                   modify zipper (fromJust . goNext) 
-                   findOne' (x : xs) 
-               _ -> return $ ObjectType ys x "" "" mcontext nso
+      findOne' xs z = toObject $ setCursor xs mcontext z
+
+      toObject Nothing = ObjectType ys (last ys) "" "" mcontext nsi
+      toObject (Just (Node (Contexted (i, _, v)) _ Empty, _)) = ObjectType ys i "" "" mcontext (fromMaybe nso v)
+      toObject _ = ObjectType ys (last ys) "" "" mcontext nso
 
       nso, nsi :: PVal 
       nso = rsValue NoSuchObject
       nsi = rsValue NoSuchInstance
 
-      getValueFromHead :: Zipper Tree (ContextedValue a) -> Maybe a
-      getValueFromHead (Node (Contexted (_, _, v)) _ Empty, _) = v
-      getValueFromHead _ = Nothing
-
-      updateSubtree :: Contexted a => OID -> Zipper Tree a -> Zipper Tree a
-      updateSubtree xs z =
-          let (x, u) = goClosest xs Nothing z
-              isLevel (Level _) = True
-              isLevel _ = False
-              cleanUnused (Level (Node v _ l)) = Level (Node v Empty l)
-              cleanUnused _ = error "cleanUnused"
-              cleanHead Empty = Empty
-              cleanHead (Node v _ l) = Node v Empty l
-          in top (cleanHead x, map cleanUnused $ filter isLevel u)
+updateSubtree :: Contexted a => OID -> Zipper Tree a -> Zipper Tree a
+updateSubtree xs z =
+    let (x, u) = goClosest xs Nothing z
+        isLevel (Level _) = True
+        isLevel _ = False
+        cleanUnused (Level (Node v _ l)) = Level (Node v Empty l)
+        cleanUnused _ = error "cleanUnused"
+        cleanHead Empty = Empty
+        cleanHead (Node v _ l) = Node v Empty l
+    in top (cleanHead x, map cleanUnused $ filter isLevel u)
 
 findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [MIB]
 findMany xs mc = mapM (flip findOne mc) xs
 
 findNext :: (Monad m, MonadIO m, Functor m) => SearchRange -> Maybe Context -> MIBTree m MIB
-findNext = undefined
+findNext sr mcontext = do
+    modify zipper top
+    modify ou top
+    modOID <- gets moduleOID
+    let start = L.get startOID sr
+        end   = L.get endOID sr
+    case (stripPrefix modOID start, stripPrefix modOID end) of
+         (Nothing, _) -> return $ ObjectType start (last start) "" "" mcontext eom
+         (Just start', Just end') -> do
+             updates <- gets ou
+             puts ou (updateSubtree start' updates)
+             initModule
+             puts ou updates
+             let fixSearchRange = L.set startOID start' . L.set endOID end' 
+             fixMib modOID . findNext' (fixSearchRange sr) <$> gets zipper
+         _ -> error "findNext"
+
+    where
+    eom :: PVal
+    eom = rsValue EndOfMibView
+
+    fixMib :: OID -> MIB -> MIB
+    fixMib m (ObjectType o i _ _ mc v) = ObjectType (m <> o) i "" "" mc v
+    fixMib _ _ = error "fixMib"
+
+    findNext' :: SearchRange -> Zipper Tree IValue -> MIB
+    findNext' sr' z 
+      | L.get include sr' =
+          let start = L.get startOID sr'
+              nz@(Node v _ _, _) = goClosest start mcontext z 
+              o = oid nz
+              Contexted (i, mc, Just pv) = v
+          in if o == start && withValue v && mc == mcontext
+                then ObjectType o i "" "" mc pv
+                else findNext' (L.set include False $ sr') z
+      | otherwise =
+          let start = L.get startOID sr'
+              nz = goClosest start mcontext z
+              l = hasLevel nz
+              n = hasNext nz
+          in case (l, n) of
+                  (True, _) -> inRange sr' $ findClosest False  start mcontext (fromJust $ goLevel nz)
+                  (False, True) -> inRange sr' $ findClosest False start  mcontext (fromJust $ goNext nz)
+                  (False, False) -> inRange sr' $ findClosest True start  mcontext (fromJust $ goUp nz)
+
+findClosest :: Bool -> OID -> Maybe Context -> Zipper Tree IValue -> MIB
+findClosest back o mcontext z =
+    let (canBeObject, checkContextEquality) = isFocusObjectType z
+        magic = if back 
+                 then not (hasLevel z)
+                 else (hasLevel z)
+        isNextAvailable = hasNext z
+    in case (canBeObject, checkContextEquality mcontext, magic, isNextAvailable) of
+            (True,  True, _,     _    ) -> getFocus z 
+            (_,     _,    True,  _    ) -> findClosest False o mcontext (fromJust $ goLevel z)
+            (_,     _,    False, True ) -> findClosest False o mcontext (fromJust $ goNext z)
+            _                           -> case goUp z of
+                                           Just nz -> findClosest True o mcontext nz
+                                           Nothing -> ObjectType o (last o) "" "" Nothing (rsValue EndOfMibView)
+
+isFocusObjectType :: Contexted a => (Tree a, t) -> (Bool, Maybe Context -> Bool)
+isFocusObjectType (Node v _ Empty,_) = (withValue v, (==) (context v))
+isFocusObjectType _ = (False, const False)
+
+getFocus :: Zipper Tree IValue -> MIB
+getFocus z@(Node (Contexted (i, mc, Just v)) _ _, _) = 
+    let o = oid z
+    in ObjectType o i "" "" mc v
+getFocus _ = error "getFocus"
 
 findManyNext :: (Monad m, MonadIO m, Functor m) => [SearchRange] -> Maybe Context -> MIBTree m [MIB]
 findManyNext xs mc = mapM (flip findNext mc) xs

@@ -132,9 +132,9 @@ goClosest ys c z = walk ys (top z)
   walk [] z' = z'
   walk (x : []) z'
     | (x,c) == giz z' = z'
-    | otherwise = maybe (Empty, snd z') (walk (x : [])) (goNext z')
+    | otherwise = maybe z' (walk (x : [])) (goNext z')
   walk (x : xs) z'
-    | (x, c) == giz z' = maybe (Empty, snd z') (walk xs) (goLevel z')
-    | otherwise = maybe (Empty, snd z') (walk (x : xs)) (goNext z')
+    | (x, c) == giz z' = maybe z' (walk xs) (goLevel z')
+    | otherwise = maybe z' (walk (x : xs)) (goNext z')
                       
 
