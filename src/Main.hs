@@ -3,7 +3,7 @@
 {-# LANGUAGE RankNTypes #-}
 module Main where
 
-import Network.Protocol.Snmp.AgentX (Value(..))
+import Network.Protocol.Snmp.AgentX (Value(..), Context)
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp.AgentX.Service
 import Network.Info
@@ -72,12 +72,15 @@ interfaces = Update ifaces
               (mkObject 3 "interfaces" "ipv6s"   Nothing : ipv6s)   <>
               (mkObject 4 "interfaces" "macs"    Nothing : macs) 
 
+ver :: Maybe Context
+ver = Just "version"
+
 simpleTree :: [MIB]
 simpleTree = 
       [ mkObject 0 "Fixmon" "about" Nothing
       , mkObjectType 0 "about" "name" Nothing $ rsValue (String "Fixmon agent")
       , mkObjectType 1 "about" "version" Nothing $ rsValue (String "0.0.1")
-      , mkObjectType 1 "about" "version" (Just "version") $ rsValue (String "Alpha")
+      , mkObjectType 1 "about" "version" ver $ rsValue (String "Alpha")
       , mkObject 1 "Fixmon" "dyn" Nothing
       , mkObjectType 0 "dyn" "name" Nothing pv1 
       , mkObjectType 1 "dyn" "version" Nothing pv1
