@@ -17,7 +17,7 @@ import Control.Exception
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
-import Pipes.Concurrent (spawn, forkIO, Buffer( Unbounded ), fromInput, toOutput)
+import Pipes.Concurrent (spawn, forkIO, fromInput, toOutput, unbounded)
 import Pipes
 import Pipes.Lift
 import Control.Concurrent.MVar
@@ -51,8 +51,8 @@ runAgent modOid tree socket'  = do
     m <- newMVar =<< flip execStateT mod' initAndRegister 
     ts <- newMVar Map.empty
     let st = ST s p m socket' i ts
-    (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
-    (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded
+    (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
+    (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
     -- open session 
     run st $ resp >-> openSession >-> output
