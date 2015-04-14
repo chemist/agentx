@@ -22,6 +22,7 @@ newtype TransactionID = TransactionID Word32 deriving (Show, Eq, Ord, Enum, Boun
 
 newtype PacketID = PacketID Word32 deriving (Show, Eq, Ord, Enum, Bounded)
 
+-- | rfc 2571 section 3.3.1, rfc 2741 section 6.1.1 Context
 newtype Context = Context ByteString deriving (Show, Ord, Eq, IsString)
 
 data Reason = Other
@@ -32,6 +33,7 @@ data Reason = Other
             | ByManager
             deriving (Show, Eq)
 
+-- | rfc 2741, 6.2.16, Error status in agentx-response-pdu
 data RError = NoAgentXError
             | OpenFailed
             | NotOpen
@@ -107,24 +109,25 @@ instance Show TaggedError where
     show (Tagged a) = show a
 
     
-data PDU = Open Timeout OID Description -- 6.2.1
-         | Close  Reason                 -- 6.2.2
-         | Register MContext Timeout Priority RangeSubid OID UpperBound -- 6.2.3
-         | Unregister MContext Priority RangeSubid OID UpperBound -- 6.2.4
-         | Get MContext [OID] -- 6.2.5
-         | GetNext MContext [SearchRange] -- 6.2.6
-         | GetBulk MContext NonRepeaters MaxRepeaters [SearchRange] -- 6.2.7
-         | TestSet MContext [VarBind] -- 6.2.8
-         | CommitSet -- 6.2.9
-         | UndoSet -- 6.2.9
-         | CleanupSet -- 6.2.9
-         | Notify MContext [VarBind] -- 6.2.10
-         | Ping MContext -- 6.2.11
-         | IndexAllocate MContext [VarBind] -- 6.2.12
-         | IndexDeallocate MContext [VarBind] -- 6.2.13
-         | AddAgentCaps MContext OID Description -- 6.2.14
-         | RemoveAgentCaps MContext OID  -- 6.2.15
-         | Response SysUptime TaggedError Index [VarBind] -- 6.2.16
+-- | rfc 2741, section 6.2
+data PDU = Open Timeout OID Description -- ^ section 6.2.1
+         | Close  Reason                 -- ^ section 6.2.2
+         | Register MContext Timeout Priority RangeSubid OID UpperBound -- ^ section 6.2.3
+         | Unregister MContext Priority RangeSubid OID UpperBound -- ^ section 6.2.4
+         | Get MContext [OID] -- ^ section 6.2.5
+         | GetNext MContext [SearchRange] -- ^ section 6.2.6
+         | GetBulk MContext NonRepeaters MaxRepeaters [SearchRange] -- ^ section 6.2.7
+         | TestSet MContext [VarBind] -- ^ section 6.2.8
+         | CommitSet -- ^ section 6.2.9
+         | UndoSet -- ^ section 6.2.9
+         | CleanupSet -- ^ section 6.2.9
+         | Notify MContext [VarBind] -- ^ section 6.2.10
+         | Ping MContext -- ^ section 6.2.11
+         | IndexAllocate MContext [VarBind] -- ^ section 6.2.12
+         | IndexDeallocate MContext [VarBind] -- ^ section 6.2.13
+         | AddAgentCaps MContext OID Description -- ^ section 6.2.14
+         | RemoveAgentCaps MContext OID  -- ^ section 6.2.15
+         | Response SysUptime TaggedError Index [VarBind] -- ^ section 6.2.16
          deriving (Show, Eq)
 
 
@@ -132,7 +135,7 @@ class Tag a b where
     tag :: a -> b
     unTag :: b -> a
 
-
+-- | Packet type, describe agentx packet.
 data Packet = Packet 
   { _version :: Version 
   , _pdu     :: PDU 
@@ -150,16 +153,28 @@ data Flags = Flags
   , _bigEndian            :: Bool
   } deriving (Show)
 
+-- | rfc 2741, section5.2 
+--
+-- with lenses
+-- startOID
+-- endOID
+-- include
 data SearchRange = SearchRange 
-  { _startOID :: OID
+  { _startOID :: OID 
   , _endOID   :: OID
   , _include  :: Bool
   } deriving (Show, Eq)
 
+-- | rfc 2741, section 5.4
 data VarBind = VarBind 
   { _vboid   :: OID 
   , _vbvalue :: Value 
   } deriving (Show, Eq)
+
+-- | constructor for VarBind
+varbind :: OID -> Value -> VarBind
+varbind oi v = VarBind oi v
+
 data ST = ST 
   { _packet   :: Packet
   , _bodySize :: Word32

@@ -4,12 +4,9 @@ module Network.Protocol.Snmp.AgentX.MIBTree.Tree where
 
 import Data.Maybe (fromJust)
 import Data.Monoid 
--- import Control.Applicative
 import Network.Protocol.Snmp.AgentX.Packet (Context)
 import Network.Protocol.Snmp (OID)
 import Prelude 
-
--- import Debug.Trace
 
 data Move b a = Next (b a)
               | Level (b a)

@@ -19,6 +19,7 @@ import Control.Category ((.))
 import Prelude hiding ((.))
 -- import Debug.Trace
 
+-- | build tree and init module
 initModule :: (Monad m, MonadIO m, Functor m) =>  MIBTree m ()
 initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou  
     where
@@ -41,6 +42,7 @@ initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou
                 modify zipper $ top . attach z
                 modify ou $ top . attach o
 
+-- | init module and register MIBs in snmp server
 initAndRegister :: (Monad m, MonadIO m, Functor m) => MIBTree m ()
 initAndRegister = do
     initModule
@@ -93,7 +95,11 @@ inRange s m =
         else ObjectType (L.get startOID s) (last $ L.get startOID s) "" "" Nothing (rsValue EndOfMibView)
 
 
-findOne :: (Monad m, MonadIO m, Functor m) => OID -> Maybe Context -> MIBTree m MIB 
+-- | find one MIB 
+findOne :: (Monad m, MonadIO m, Functor m) => 
+      OID  -- ^ path for find
+    -> Maybe Context -- ^ context, you can have many values with one path and different context
+    -> MIBTree m MIB 
 findOne ys mcontext = do
     -- init zippers
     modify zipper top
@@ -134,10 +140,15 @@ updateSubtree xs z =
         cleanHead (Node v _ l) = Node v Empty l
     in top (cleanHead x, map cleanUnused $ filter isLevel u)
 
+-- | like findOne, but for many paths
 findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [MIB]
 findMany xs mc = mapM (flip findOne mc) xs
 
-findNext :: (Monad m, MonadIO m, Functor m) => SearchRange -> Maybe Context -> MIBTree m MIB
+-- | find next node in MIBTree 
+findNext :: (Monad m, MonadIO m, Functor m) => 
+      SearchRange  -- ^ SearchRange (getwalk or getnext requests)
+    -> Maybe Context -- ^ context
+    -> MIBTree m MIB -- ^ search result
 findNext sr mcontext = do
     modify zipper top
     modify ou top
@@ -208,6 +219,7 @@ getFocus z@(Node (Contexted (i, mc, Just v)) _ _, _) =
     in ObjectType o i "" "" mc v
 getFocus _ = error "getFocus"
 
+-- | like findNext
 findManyNext :: (Monad m, MonadIO m, Functor m) => [SearchRange] -> Maybe Context -> MIBTree m [MIB]
 findManyNext xs mc = mapM (flip findNext mc) xs
 

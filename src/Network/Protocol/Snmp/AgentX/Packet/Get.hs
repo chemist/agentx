@@ -267,6 +267,7 @@ parsePdu t f s
     | otherwise = error "parse pdu unknown tag"
 
 
+-- | get body size from header
 bodySizeFromHeader :: BL.ByteString -> Int64
 bodySizeFromHeader "" = 0
 bodySizeFromHeader bs =

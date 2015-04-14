@@ -14,9 +14,9 @@ import Network.Protocol.Snmp.AgentX.MIBTree.Tree
 import Network.Protocol.Snmp (Value(..), OID)
 import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError)
 
-
+-- | Wrapper for value
 data PVal = Read 
-            { readAIO        :: IO Value 
+            { readAIO        :: IO Value  
             }
           | ReadWrite 
             { readAIO        :: IO Value
@@ -32,8 +32,9 @@ instance Show PVal where
 type Parent = String
 type Name   = String
 
+-- | MIB describe objects and object-types in internal tree with data.
 data MIB = Object
-    { oi :: OID
+    { oi :: OID -- ^ accessor for OID
     , int :: Integer
     , parent :: Parent
     , name  :: Name
@@ -43,8 +44,8 @@ data MIB = Object
     , int :: Integer
     , parent :: Parent
     , name :: Name
-    , context :: Maybe Context
-    , val :: PVal 
+    , context :: Maybe Context -- ^ accessor for Maybe Context
+    , val :: PVal  -- ^ accessor for PVal
     }
 
 deriving instance Show MIB 
@@ -66,11 +67,13 @@ instance Show a => Show (ContextedValue a) where
     show (Contexted (_, Just c, Just v)) = "- contexted leaf " <> show c <> show v
     show _ = "bad node"
 
+-- | Update, for rebuild oid tree in runtime
 newtype Update = Update { unUpdate ::forall  m . (Monad m, MonadIO m, Functor m) =>  m [MIB]}
 
 type IValue = ContextedValue PVal  
 type IUpdate = ContextedValue Update 
 
+-- | internal state for build agentx submodule
 data Module = Module
   { _zipper        :: Zipper Tree IValue 
   , _ou            :: Zipper Tree IUpdate
@@ -85,9 +88,16 @@ mkLabel ''Module
 instance Show Module where
     show (Module z ou' _ _ _ _) = show z ++ "\n" ++ show ou'
 
+-- | MIBTree, state transformer, with Module under ground
 type MIBTree = StateT Module  
 
-mkModule :: (Monad m, MonadIO m, Functor m) => OID -> [MIB] -> m Module 
+-- | Constructor for Module
+--
+--
+mkModule :: (Monad m, MonadIO m, Functor m) => 
+    OID -- ^ base module OID
+  -> [MIB] -- ^ all MIB for create module
+  -> m Module 
 mkModule moduleOid mibs = do
     r <- liftIO $ newEmptyMVar
     unr <- liftIO $ newEmptyMVar
@@ -108,14 +118,26 @@ buildTree ms = foldMap singleton $ fillOid ms
         singleton' ((i:xs), obj@(Object _ _ _ _ _)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Node (zero i) Empty (snd $ singleton' (xs, obj)))
         singleton' ((i:xs), obj@(ObjectType{})) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
 
+-- | check MIB subtype
 isObjectType :: MIB -> Bool
 isObjectType (ObjectType{}) = True
 isObjectType _ = False
 
-mkObject :: Integer -> Parent -> Name -> Maybe Update -> MIB  
+-- | Constructor for MIB, create Object in mib tree
+mkObject :: Integer -- ^ OID number for this object
+  -> Parent -- ^ parent name for this object
+  -> Name  -- ^ name for this object
+  -> Maybe Update  -- ^ Just Update if you need dynamic module
+  -> MIB -- ^ created MIB
 mkObject = Object [] 
 
-mkObjectType :: Integer -> Parent -> Name -> Maybe Context -> PVal -> MIB  
+-- | Constructor for MIB, create Object-Type in mib tree
+mkObjectType :: Integer -- ^ OID number for this object
+  -> Parent  -- ^ parent
+  -> Name -- ^ name
+  -> Maybe Context -- ^ context
+  -> PVal -- ^ value
+  -> MIB -- ^ created MIB 
 mkObjectType = ObjectType []
 
 fillOid :: [MIB ] -> [MIB ]
@@ -147,17 +169,19 @@ fillOid (Object o i p n u : xs)
     addOid o' (Object _ i' p' n' u') = Object (o' <> [i']) i' p' n' u'
     addOid o' (ObjectType _ i' p' n' v' u') = ObjectType (o' <> [i']) i' p' n' v' u'
 
-
-
+-- | PVal constructor for read only value
 rsValue :: Value -> PVal 
 rsValue v = Read $ return v
 
+-- | PVal constructor for read only IO Value 
 rdValue :: IO Value -> PVal 
 rdValue = Read   
 
+-- | PVal constructor for read write value
 rwValue :: IO Value -> (Value -> IO CommitError) -> (Value -> IO TestError) -> (Value -> IO UndoError) -> PVal 
 rwValue = ReadWrite
 
+-- | check for PVal
 isWritable :: PVal -> Bool
 isWritable ReadWrite{} = True
 isWritable _ = False

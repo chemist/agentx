@@ -32,8 +32,6 @@ import Network.Protocol.Snmp.AgentX.MIBTree hiding (register, unregister)
 import qualified Network.Protocol.Snmp.AgentX.MIBTree as MIBTree
 import Network.Protocol.Snmp.AgentX.Handlers
 import Network.Protocol.Snmp.AgentX.Types
--- import Debug.Trace
---
 
 agent :: String -> OID -> [MIB] -> IO ()
 agent path o tree = bracket (openSocket path)
@@ -50,7 +48,7 @@ runAgent modOid tree socket'  = do
     i <- newEmptyMVar
     p <- newMVar minBound
     mod' <- mkModule modOid tree 
-    m <- newMVar =<< flip execStateT mod' initAndRegister -- $ do
+    m <- newMVar =<< flip execStateT mod' initAndRegister 
     ts <- newMVar Map.empty
     let st = ST s p m socket' i ts
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn Unbounded

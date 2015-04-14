@@ -91,7 +91,7 @@ getBulkHandler = undefined
 mibToVarBind :: (Monad m, MonadIO m, Functor m) => MIB -> m VarBind
 mibToVarBind m = do
     v <- liftIO $ readAIO (val m) 
-    return $ VarBind (oi m) v
+    return $ varbind (oi m) v
 
 {--
 getUpdate :: Maybe Context -> VarBind -> AgentT (Either TaggedError Update)
