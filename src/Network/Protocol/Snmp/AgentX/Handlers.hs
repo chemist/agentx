@@ -42,7 +42,12 @@ route packet = route' pdu' >>= return . fmap setPdu
     setPdu = flip (DL.set pdu) packet
     transactionId = DL.get tid packet
     route' :: PDU -> AgentT (Maybe PDU)
-    route' (Get mcontext oids) = makePdu =<< getHandler oids mcontext
+    route' (Get mcontext oids) = do
+        r <- makePdu =<< getHandler oids mcontext
+        bridgeToBase $ do
+            z <- get 
+            liftIO $ print (DL.get zipper z)
+        return r
     route' (GetNext mcontext srange) = makePdu =<< getNextHandler mcontext srange 
     route' (GetBulk mcontext nonRepeaters maxRepeaters srange) = makePdu =<< getBulkHandler mcontext nonRepeaters maxRepeaters srange 
     route' (TestSet mcontext varBindList) = makePdu =<< testSetHandler mcontext varBindList transactionId
@@ -73,7 +78,6 @@ route packet = route' pdu' >>= return . fmap setPdu
     route' _ = do
         liftIO $ print packet
         makePdu =<< return [Left (Tagged RequestDenied)]
-  
 
 uptime :: AgentT SysUptime
 uptime = do
@@ -109,36 +113,3 @@ mibToVarBind m = do
     v <- liftIO $ readAIO (val m) 
     return $ varbind (oi m) v
 
-{--
-getUpdate :: Maybe Context -> VarBind -> AgentT (Either TaggedError Update)
-getUpdate mc varbind = do
-    m <- bridgeToBase (findOne mc (DL.get vboid varbind))  
-    liftIO $ print m
-    if (isWritable m)
-       then do
-           r <- liftIO $ testSetAIO (DL.get vbvalue varbind)
-           case r of
-                NoTestError -> return $ Right (upd m)
-                e -> return $ Left (Tagged e)
-       else return $ Left (Tagged NotWritable)
-
-getUpdateList :: Maybe Context -> [VarBind] -> AgentT [Either TaggedError Update]
-getUpdateList mcontext = mapM (getUpdate mcontext)
-         
-
-setHandler :: [VarBind] -> AgentT [Either TaggedError MIB]
-setHandler [] = return []
-setHandler (x:xs) = (:) <$> setOne x <*> setHandler xs
-
-setOne :: VarBind -> AgentT (Either TaggedError MIB)
-setOne (VarBind oid' _value') = do
-    m <- bridgeToBase (findOne oid')
-    liftIO $ print m
-    case (Map.lookup "" (val m), upd m) of
-         (Just NoSuchInstance, _) -> return $ Left (Tagged NotWritable)
-         (Just NoSuchObject, _) -> return $ Left (Tagged NotWritable)
-         (_, Fixed) -> return $ Left (Tagged NotWritable)
-         (_, Read _) -> return $ Left (Tagged NotWritable)
-         _ -> return $ Right m
-
---}

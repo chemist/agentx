@@ -3,10 +3,12 @@
 {-# LANGUAGE RankNTypes #-}
 module Main where
 
-import Network.Protocol.Snmp.AgentX (Value(..), Context)
+import Network.Protocol.Snmp.AgentX (Value(..))
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp.AgentX.Service
+import Network.Protocol.Snmp.AgentX.Packet
 import Network.Info
+import qualified Data.ByteString as BS
 import Data.ByteString (ByteString)
 import qualified Network.Info as NI
 import Data.ByteString.Char8 (pack)
@@ -15,12 +17,10 @@ import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Applicative ((<$>))
 import Control.Monad.State
+import Data.IORef
+import GHC.Int (Int32)
 
-pv1 :: PVal
-pv1 = rsValue (String "hello")
 
-pv2 :: PVal
-pv2 = rsValue (Integer 1)
 
 str :: ByteString -> PVal
 str x = rsValue (String x)
@@ -28,30 +28,45 @@ str x = rsValue (String x)
 now :: PVal
 now = rdValue $  TimeTicks . flip div' 1 <$> liftIO getPOSIXTime
 
-subTree :: Update 
-subTree = Update (return ls)
+rws :: IORef Value -> PVal
+rws io = rwValue readV commit test undo
+  where
+    test (String x) 
+      | BS.length x < 10 = return NoTestError
+      | otherwise = return TooBig
+    test _ = return WrongType
+    commit v = do
+        writeIORef io v
+        return NoCommitError
+    undo _ = return NoUndoError
+    readV = readIORef io
+
+rwi :: IORef Value -> PVal
+rwi io = rwValue readV commit test undo
+  where
+    test (Integer x) 
+      | x < 5 = return NoTestError
+      | otherwise = return TooBig
+    test _ = return WrongType
+    commit v = do
+        writeIORef io v
+        return NoCommitError
+    undo _ = return NoUndoError
+    readV = readIORef io
+
+dynTree :: IORef Value -> Update
+dynTree i = Update $ do
+    Integer count <- liftIO $ readIORef i
+    let first = mkObjectType 0 "dyn" "count" Nothing (rwi i)
+    return $ first : map (\x -> mkObject (fromIntegral x + 1) "dyn" ("count" ++ show (x + 1)) (Just (subTree x))) [0 .. count] 
+
+subTree :: Int32 -> Update 
+subTree i = Update (return ls)
   where
     ls =
-        [ mkObjectType 0 "tree" "about" Nothing (str "subTree")
-        , mkObjectType 1 "tree" "name" Nothing pv1
-        , mkObject 2 "tree" "sub" (Just subTree1)
-        , mkObject 3 "tree" "sub" (Just subTree2)
+        [ mkObjectType 0 ("count" ++ show (i + 1)) "first" Nothing (str "first")
+        , mkObjectType 1 ("count" ++ show (i + 1)) "second" Nothing (str "second")
         ]
-
-subTree1 :: Update 
-subTree1 = Update (return ls)
-  where
-    ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree1"))
-         , mkObjectType 1 "tree" "name" Nothing now
-         , mkObject 2 "tree" "sub" (Just subTree2)
-         ]
-
-subTree2 :: Update 
-subTree2 = Update (return ls)
-  where
-    ls = [ mkObjectType 0 "tree" "about" Nothing (rsValue (String "subTree2"))
-         , mkObjectType 1 "tree" "name" Nothing pv1
-         ]
 
 interfaces :: Update 
 interfaces = Update ifaces
@@ -75,25 +90,20 @@ interfaces = Update ifaces
 ver :: Maybe Context
 ver = Just "version"
 
-simpleTree :: [MIB]
-simpleTree = 
+simpleTree :: IORef Value -> IORef Value -> [MIB]
+simpleTree m i = 
       [ mkObject 0 "Fixmon" "about" Nothing
       , mkObjectType 0 "about" "name" Nothing $ rsValue (String "Fixmon agent")
       , mkObjectType 1 "about" "version" Nothing $ rsValue (String "0.0.1")
       , mkObjectType 1 "about" "version" ver $ rsValue (String "Alpha")
-      , mkObject 1 "Fixmon" "dyn" Nothing
-      , mkObjectType 0 "dyn" "name" Nothing pv1 
-      , mkObjectType 1 "dyn" "version" Nothing pv1
-      , mkObjectType 2 "dyn" "contexted" Nothing pv2
-      , mkObject 3 "dyn" "tree" (Just subTree)
-      , mkObject 4 "dyn" "net" (Just subTree1)
+      , mkObjectType 2 "about" "comment" Nothing (rws m) 
+      , mkObject 1 "Fixmon" "dyn" (Just (dynTree i))
       , mkObject 2 "Fixmon" "interfaces" (Just interfaces)
       ]
 
-
-
-
-
 main :: IO ()
-main = agent "/var/agentx/master" [1,3,6,1,4,1,44729] simpleTree
+main = do
+    m <- newIORef (String "init")
+    i <- newIORef (Integer 0)
+    agent "/var/agentx/master" [1,3,6,1,4,1,44729] (simpleTree m i)
 
