@@ -181,6 +181,7 @@ data ST = ST
   } 
 
 mkLabels [''Packet, ''Flags, ''VarBind, ''SearchRange, ''ST ]
+
 instance Tag Reason Word8 where
     tag Other         = 1
     tag ParseError    = 2

@@ -10,12 +10,11 @@ import Data.Map
 
 import Network.Protocol.Snmp.AgentX.Packet 
 import Network.Protocol.Snmp.AgentX.MIBTree
-import Network.Protocol.Snmp
 
 
 data Transaction = Transaction
   { tcontext :: Maybe Context
-  , vblist :: [Value]
+  , vblist :: [VarBind]
   , statusV :: TransactionState
   } deriving Show
 

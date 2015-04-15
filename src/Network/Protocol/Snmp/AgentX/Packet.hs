@@ -25,6 +25,8 @@ module Network.Protocol.Snmp.AgentX.Packet (
 , SysUptime
 , VarBind
 , varbind
+, vbvalue
+, vboid
 , Index
 , NonRepeaters
 , MaxRepeaters
