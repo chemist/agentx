@@ -10,6 +10,7 @@ import Control.Concurrent.MVar
 import qualified Data.Label as DL
 import qualified Data.Map as Map
 import Data.List (find)
+import Data.Maybe
 
 import Network.Protocol.Snmp.AgentX.MIBTree
 import Network.Protocol.Snmp (OID)
@@ -45,12 +46,7 @@ route packet = route' pdu' >>= return . fmap setPdu
     setPdu = flip (DL.set pdu) packet
     transactionId = DL.get tid packet
     route' :: PDU -> SubAgent (Maybe PDU)
-    route' (Get mcontext oids) = do
-        r <- makePdu =<< getHandler oids mcontext
-        bridgeToBase $ do
-            z <- get 
-            liftIO $ print (DL.get zipper z)
-        return r
+    route' (Get mcontext oids) = makePdu =<< getHandler oids mcontext
     route' (GetNext mcontext srange) = makePdu =<< getNextHandler mcontext srange 
     route' (GetBulk mcontext nonRepeaters maxRepeaters srange) = makePdu =<< getBulkHandler mcontext nonRepeaters maxRepeaters srange 
     route' (TestSet mcontext varBindList) = makePdu =<< testSetHandler mcontext varBindList transactionId
@@ -74,8 +70,11 @@ route packet = route' pdu' >>= return . fmap setPdu
     route' CleanupSet = do
         liftIO $ print packet
         tr <- transactions <$> ask
-        liftIO $ print =<< readMVar tr
+        maybeTransaction <-  Map.lookup transactionId <$> (liftIO . readMVar $ tr)
+        let oidsList = map (DL.get vboid) $ fromMaybe [] (vblist `fmap` maybeTransaction)
+        let mcontext = join $ tcontext `fmap` maybeTransaction
         liftIO . modifyMVar_ tr $ return . Map.delete transactionId
+        void $ bridgeToBase (wrap (findMany oidsList mcontext))
         return Nothing
     
     route' _ = do
@@ -88,10 +87,10 @@ uptime = do
     liftIO . readMVar $ nowref
 
 getHandler :: [OID] -> Maybe Context -> SubAgent [Either TaggedError VarBind]
-getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findMany xs mc))
+getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (wrap (findMany xs mc)))
 
 getNextHandler :: Maybe Context -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
-getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findManyNext xs mc))
+getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (wrap (findManyNext xs mc)))
 
 getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
 getBulkHandler = undefined

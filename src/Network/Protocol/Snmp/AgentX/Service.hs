@@ -48,24 +48,23 @@ openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path
 runAgent :: OID -> [MIB] -> Socket -> IO ()
 runAgent modOid tree socket'  = do
     hSetBuffering stdout LineBuffering
-    s <- newMVar =<< getSysUptime
-    i <- newEmptyMVar
-    p <- newMVar minBound
-    mod' <- mkModule modOid tree 
-    m <- newMVar =<< flip execStateT mod' initAndRegister 
-    ts <- newMVar Map.empty
-    let st = SubAgentState s p m socket' i ts
+    -- make state
+    st <- initAgent modOid tree socket'
+    -- start timer
+    timer <- forkIO $ modifyMVar_ (sysuptime st) (const $ getSysUptime) >> threadDelay 1000000
+    -- spawn mailboxes for requests and for responses
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
+    -- spawn sort machine 
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
     -- open session 
     run st $ resp >-> openSession >-> output
-    -- start registration fiber
+    -- start register fiber
     regPid <- fiber st $ resp >-> registrator True >->  output
+    -- start unregister fiber
     unregPid <- fiber st $ resp >-> registrator False >-> output
     -- start server fiber
     serverPid <-  fiber st $ req >-> server
---    serverPid <-  fiber st $ req >-> _dp "in " >-> server
     -- start agent fiber
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
@@ -74,7 +73,17 @@ runAgent modOid tree socket'  = do
 --     putMVar unreg (toList tree)
     liftIO $ putStrLn "unregister all MIB"
     liftIO $ threadDelay 1000000
-    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, unregPid] -- p2,p3,p4,p5, 
+    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, unregPid, timer] -- p2,p3,p4,p5, 
+
+initAgent :: OID -> [MIB] -> Socket -> IO SubAgentState
+initAgent modOid tree socket' = do
+    sysUptimeMVar <- newMVar =<< getSysUptime
+    sessionsMVar <- newEmptyMVar
+    packetCounterMVar <- newMVar minBound
+    mod' <- mkModule modOid tree 
+    moduleMVar <- newMVar =<< flip execStateT mod' initAndRegister 
+    transactionsMVar <- newMVar Map.empty
+    return $ SubAgentState sysUptimeMVar packetCounterMVar moduleMVar socket' sessionsMVar transactionsMVar
 
 ---------------------------------------------------------------------------
 -- Pipes eval 

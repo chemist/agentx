@@ -38,6 +38,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree (
 , rsValue
 , rdValue
 , rwValue
+, wrap
 )
 where
 import Network.Protocol.Snmp.AgentX.MIBTree.MIBTree

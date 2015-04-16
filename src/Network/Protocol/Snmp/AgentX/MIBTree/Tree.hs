@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Network.Protocol.Snmp.AgentX.MIBTree.Tree 
 ( Zippers(..)
 , Contexted(..)
@@ -9,13 +10,16 @@ module Network.Protocol.Snmp.AgentX.MIBTree.Tree
 , hasLevel
 , goClosest
 , Move(..)
+, regPair
 )
 where
 
 import Data.Maybe (fromJust)
-import Data.Monoid 
+import Data.Monoid hiding (First)
 import Network.Protocol.Snmp.AgentX.Packet (Context)
 import Network.Protocol.Snmp (OID)
+import Data.Algorithm.Diff
+import Data.List (sort)
 import Prelude 
 
 data Move b a = Next (b a)
@@ -69,10 +73,14 @@ instance (Contexted a, Show a) => Show (Tree a) where
     
         shift first rest = zipWith (++) (first : repeat rest)
 
-{--
-testTree :: Tree (Integer, Maybe String)
-testTree = Node (0, Just "first") (Node (1, Just "second") Empty Empty) (Node (10, Just "third") Empty Empty)
---}
+-- testTree :: Tree (Integer, Maybe String)
+-- testTree = Node (0, Just "first") (Node (1, Just "second") Empty Empty) (Node (10, Just "third") Empty Empty)
+
+instance Contexted (Integer, Maybe String) where
+    index = fst
+    context = undefined
+    withValue (_, Nothing) = False
+    withValue _ = True
 
 instance Zippers Tree where
     toZipper t = (t, [])
@@ -146,5 +154,27 @@ goClosest ys c z = walk ys (top z)
   walk (x : xs) z'
     | x == fst (giz z') = maybe z' (walk xs) (goLevel z')
     | otherwise = maybe z' (walk (x : xs)) (goNext z')
-                      
 
+type RegType = [(OID, Maybe Context)]
+type ToRegistrate = [(OID, Maybe Context)]
+type ToUnRegistrate = [(OID, Maybe Context)]
+                      
+toVList :: Contexted a => (OID, Tree a) -> RegType
+toVList (path, Node a Empty Empty)
+  | withValue a = [(index a : path, context a)]
+  | otherwise = []
+toVList (path, Node a level next) 
+  | withValue a = (index a : path, context a) : toVList (path, level) <> toVList (index a : path, next)
+  | otherwise = toVList (path, level) <> toVList (index a : path, next)
+toVList (_, Empty) = []
+
+regPair :: Contexted a => Tree a -> Tree a -> (ToRegistrate, ToUnRegistrate)
+regPair old new = splitDiff $ getDiff (sort $ toVList ([], old)) (sort $ toVList ([], new))
+
+splitDiff :: [Diff a] -> ([a], [a])
+splitDiff = splitDiff' ([], []) 
+  where
+    splitDiff' (toUnReg, toReg) [] = (toUnReg, toReg)
+    splitDiff' (toUnReg, toReg) (Both _ _ : xs) = splitDiff' (toUnReg, toReg) xs
+    splitDiff' (toUnReg, toReg) (First x : xs) = splitDiff' (x : toUnReg, toReg) xs
+    splitDiff' (toUnReg, toReg) (Second x : xs) = splitDiff' (toUnReg, x : toReg) xs

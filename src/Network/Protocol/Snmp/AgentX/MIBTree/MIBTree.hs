@@ -8,6 +8,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree.MIBTree
 , findNext
 , findClosest
 , findManyNext
+, wrap
 )
 where
 
@@ -103,7 +104,6 @@ inRange s m =
         then ObjectType (oi m) (last $ oi m) "" "" Nothing (val m)
         else ObjectType (L.get startOID s) (last $ L.get startOID s) "" "" Nothing (rsValue EndOfMibView)
 
-
 -- | find one MIB 
 findOne :: (Monad m, MonadIO m, Functor m) => 
       OID  -- ^ path for find
@@ -148,6 +148,17 @@ updateSubtree xs z =
         cleanHead Empty = Empty
         cleanHead (Node v _ l) = Node v Empty l
     in top (cleanHead x, map cleanUnused $ filter isLevel u)
+
+wrap :: (Monad m, MonadIO m, Functor m) => MIBTree m x -> MIBTree m x
+wrap x = do
+    liftIO $ print "wrap"
+    old <- fst . top <$> gets zipper  
+    r <- x
+    new <- fst . top <$> gets zipper  
+    let diff = regPair old new
+    liftIO $ print diff
+    liftIO $ print "unwrap"
+    return r
 
 -- | like findOne, but for many paths
 findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [MIB]
@@ -231,4 +242,5 @@ getFocus _ = error "getFocus"
 -- | like findNext
 findManyNext :: (Monad m, MonadIO m, Functor m) => [SearchRange] -> Maybe Context -> MIBTree m [MIB]
 findManyNext xs mc = mapM (flip findNext mc) xs
+
 

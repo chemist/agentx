@@ -95,12 +95,15 @@ simpleTree m i =
       , mkObjectType 1 "about" "version" ver $ rsValue (String "Alpha")
       , mkObjectType 2 "about" "comment" Nothing (rws m) 
       , mkObject 1 "Fixmon" "dyn" (Just (dynTree i))
-      , mkObject 2 "Fixmon" "interfaces" (Just interfaces)
+      -- , mkObject 2 "Fixmon" "interfaces" (Just interfaces)
       ]
 
-main :: IO ()
-main = do
+tree :: IO [MIB]
+tree = do
     m <- newIORef (String "init")
     i <- newIORef (Integer 0)
-    agent "/var/agentx/master" [1,3,6,1,4,1,44729] (simpleTree m i)
+    return $ simpleTree m i
+    
+main :: IO ()
+main = agent "/var/agentx/master" [1,3,6,1,4,1,44729] =<< tree
 

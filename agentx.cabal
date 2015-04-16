@@ -24,6 +24,7 @@ executable agentx
                      , bitwise
                      , network
                      , fclabels
+                     , Diff
                      , mtl
                      , transformers
                      , time
@@ -60,6 +61,7 @@ library
                      , bitwise
                      , network
                      , fclabels
+                     , Diff
                      , mtl
                      , transformers
                      , time
