@@ -1,6 +1,16 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
-module Network.Protocol.Snmp.AgentX.MIBTree.Tree where
+module Network.Protocol.Snmp.AgentX.MIBTree.Tree 
+( Zippers(..)
+, Contexted(..)
+, Tree(..)
+, Zipper
+, hasNext
+, hasLevel
+, goClosest
+, Move(..)
+)
+where
 
 import Data.Maybe (fromJust)
 import Data.Monoid 
@@ -59,8 +69,10 @@ instance (Contexted a, Show a) => Show (Tree a) where
     
         shift first rest = zipWith (++) (first : repeat rest)
 
+{--
 testTree :: Tree (Integer, Maybe String)
 testTree = Node (0, Just "first") (Node (1, Just "second") Empty Empty) (Node (10, Just "third") Empty Empty)
+--}
 
 instance Zippers Tree where
     toZipper t = (t, [])

@@ -111,5 +111,5 @@ testSetHandler mcontext varBindList transactionId = do
 mibToVarBind :: (Monad m, MonadIO m, Functor m) => MIB -> m VarBind
 mibToVarBind m = do
     v <- liftIO $ readAIO (val m) 
-    return $ varbind (oi m) v
+    return $ mkVarBind (oi m) v
 

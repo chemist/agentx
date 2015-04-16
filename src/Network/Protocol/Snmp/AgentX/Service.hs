@@ -22,6 +22,7 @@ import Pipes
 import Pipes.Lift
 import Control.Concurrent.MVar
 import Data.Maybe
+import Data.Default
 import qualified Data.Map.Strict as Map 
 import qualified Data.Label as DL
 import Prelude 
@@ -157,7 +158,7 @@ register = do
         mibToPackets :: MIB -> Packet
         mibToPackets m =
             let pduList = Register (context m) minBound (toEnum 127) minBound (oi m) Nothing
-            in mkPacket pduList minBound minBound minBound
+            in mkPacket def pduList def minBound minBound minBound
 
 unregister :: AgentT [Packet]
 unregister = do
@@ -169,17 +170,17 @@ unregister = do
         mibToPackets :: MIB -> Packet
         mibToPackets m =
             let pduList = Unregister (context m) (toEnum 127) minBound (oi m) Nothing
-            in mkPacket pduList  minBound minBound minBound
+            in mkPacket def pduList def  minBound minBound minBound
 
 open :: AgentT Packet
 open = do
     s <- mibs <$> ask
     m <- liftIO $ readMVar s
     let open' = Open minBound (DL.get moduleOID m) ("Haskell AgentX sub-aagent")
-    return $ mkPacket open' minBound minBound minBound 
+    return $ mkPacket def open' def minBound minBound minBound 
 
 ping :: Packet
-ping = mkPacket (Ping Nothing) minBound minBound minBound 
+ping = mkPacket def (Ping Nothing) def minBound minBound minBound 
 
 getSid :: AgentT SessionID
 getSid = do

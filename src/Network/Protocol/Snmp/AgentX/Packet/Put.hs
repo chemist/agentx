@@ -1,6 +1,8 @@
 {-# LANGUAGE TemplateHaskell, TypeOperators #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE RankNTypes #-}
+{-# OPTIONS_GHC -fno-warn-missing-signatures #-}
 module Network.Protocol.Snmp.AgentX.Packet.Put 
 ( putPacket
 ) where
@@ -22,10 +24,12 @@ import Prelude hiding ((.))
 import Network.Protocol.Snmp.AgentX.Packet.Types
 import Network.Protocol.Snmp (Value(..), OID)
 
-type Pack = State ST
+type Pack = State (Packet, Word32)
+
+(packet, bodySize) = $(DL.getLabel ''(,))
 
 putPacket :: Packet -> Put
-putPacket p = putBuilder . evalState pack $ ST p 0 
+putPacket p = putBuilder . evalState pack $ (p, 0)
        
 packBody :: Pack Builder 
 packBody = packsz =<< DLM.gets (pdu . packet)
@@ -36,9 +40,9 @@ pack = do
     !s <-  packSize
     p <-  DLM.gets (pdu . packet)
     f <-  packFlags
-    SessionID sid' <- DLM.gets (sid . packet)
-    PacketID pid' <- DLM.gets (pid . packet)
-    TransactionID tid' <- DLM.gets (tid . packet)
+    sid' <- econvert `fmap` DLM.gets (sid . packet)
+    pid' <- econvert `fmap` DLM.gets (pid . packet)
+    tid' <- econvert `fmap` DLM.gets (tid . packet)
     psid <- pack32 sid'
     ppid <- pack32 pid'
     ptid <- pack32 tid'
@@ -64,7 +68,12 @@ pack32 = packWord putWord32be putWord32le
 
 packFlags :: Pack Builder
 packFlags = do
-    Flags a b c d e <-  gets (flags . packet )
+    flags' <-  gets (flags . packet )
+    let a = DL.get instanceRegistration flags'
+        b = DL.get newIndex flags'
+        c = DL.get anyIndex flags'
+        d = DL.get nonDefaultContext flags'
+        e = DL.get bigEndian flags'
     return $ singleton $ fromListLE [a, b, c, d, e]
 
 packBool :: Bool -> Pack Builder
@@ -112,12 +121,15 @@ instance SizedBuilder Integer where
     packsz x = packsz (fromIntegral x :: Word32)
 
 instance SizedBuilder VarBind where
-    packsz (VarBind o v) = do
-        t <-  packsz (tag v :: Word16)
+    packsz vb = do
+        t <-  packsz (tag value' :: Word16)
         z <-  packsz (0 :: Word16)
-        oi <- packOID False o
-        val <-  packsz v
+        oi <- packOID False oid'
+        val <-  packsz value'
         return $ t <> z <> oi <> val
+        where
+        oid' = DL.get vboid vb
+        value' = DL.get vbvalue vb
 
 instance SizedBuilder (Maybe Context) where
     packsz Nothing = fixContextFlags Nothing >> return empty

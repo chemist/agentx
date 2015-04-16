@@ -8,15 +8,17 @@ where
 import Network.Protocol.Snmp.AgentX.Packet.Types ( bigEndian
                                                  , nonDefaultContext
                                                  , unTag
-                                                 , Flags(..)
+                                                 , Flags
+                                                 , mkFlags
                                                  , PDU(..)
-                                                 , VarBind(..)
+                                                 , VarBind
+                                                 , mkVarBind
+                                                 , SearchRange
+                                                 , mkSearchRange
                                                  , Context(..)
-                                                 , SearchRange(..) 
-                                                 , Packet(..)
-                                                 , PacketID(..)
-                                                 , TransactionID(..)
-                                                 , SessionID(..)
+                                                 , Packet
+                                                 , mkPacket
+                                                 , econvert
                                                  )
 import Network.Protocol.Snmp (Value(..), OID)
 
@@ -33,21 +35,21 @@ import Data.Label
 
 getPacket :: Get Packet
 getPacket = do
-    version <- getWord8 
+    version <- econvert `fmap` getWord8 
     pduTag <- getWord8
     flags <- decodeFlags <$> getWord8
     _reserved <- getWord8
-    sid <- get32 flags 
-    tid <- get32 flags 
-    pid <- get32 flags 
+    sid <- econvert `fmap` get32 flags 
+    tid <- econvert `fmap` get32 flags 
+    pid <- econvert `fmap` get32 flags 
     bodySize <- get32 flags 
     pdu <- parsePdu pduTag flags bodySize
-    return $ Packet version pdu flags (SessionID sid) (TransactionID tid) (PacketID pid)
+    return $ mkPacket version pdu flags sid tid pid
 
 decodeFlags :: Word8 -> Flags
 decodeFlags x =
     let (i:n:a:nd:nb:_) = toListLE x
-    in Flags i n a nd nb
+    in mkFlags i n a nd nb
 
 get16 :: Flags -> Get Word16
 get16 f = case get bigEndian f of
@@ -114,7 +116,7 @@ getSearchRange :: Flags -> Get SearchRange
 getSearchRange bo = do
     (first, include) <- getOid bo
     (second, _) <- getOid bo
-    return $ SearchRange first second include
+    return $ mkSearchRange first second include
 
 getSearchRangeList :: Flags -> [SearchRange] -> Get [SearchRange]
 getSearchRangeList bo xs = do
@@ -152,7 +154,7 @@ getVarBind bo = do
     _reserved <- getWord16be
     (oi, _) <- getOid bo
     v <- getValue bo valueTag 
-    return $ VarBind oi v
+    return $ mkVarBind oi v
 
 getVarBindList :: Flags -> [VarBind] -> Get [VarBind]
 getVarBindList bo xs = do

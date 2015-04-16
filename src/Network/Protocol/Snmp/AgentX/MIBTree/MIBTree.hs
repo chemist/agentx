@@ -1,6 +1,15 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Network.Protocol.Snmp.AgentX.MIBTree.MIBTree where
+module Network.Protocol.Snmp.AgentX.MIBTree.MIBTree 
+( initModule
+, initAndRegister
+, findOne
+, findMany
+, findNext
+, findClosest
+, findManyNext
+)
+where
 
 import Data.Maybe 
 import Control.Applicative
@@ -37,7 +46,7 @@ initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou
                 modify zipper $  const (mibs, [])
                 modify ou $ const (updates, [])
                 initModule
-                Module (z,_) (o,_) _ _ _ _ <- get
+                Module (z,_) (o,_) _ _ _ <- get
                 put old
                 modify zipper $ top . attach z
                 modify ou $ top . attach o
@@ -46,7 +55,7 @@ initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou
 initAndRegister :: (Monad m, MonadIO m, Functor m) => MIBTree m ()
 initAndRegister = do
     initModule
-    Module z _ b _ mv _<- get 
+    Module z _ b mv _<- get 
     liftIO $ print z
     liftIO $ putMVar mv (addBaseOid b $ toRegistrationList z)
 

@@ -28,6 +28,7 @@ executable agentx
                      , transformers
                      , time
                      , containers
+                     , data-default
                      , network-info
                      , safe
                      , pipes-network
@@ -62,6 +63,7 @@ library
                      , mtl
                      , transformers
                      , time
+                     , data-default
                      , containers
                      , network-info
                      , safe

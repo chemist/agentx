@@ -2,7 +2,33 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE RankNTypes #-}
-module Network.Protocol.Snmp.AgentX.MIBTree.Types where
+module Network.Protocol.Snmp.AgentX.MIBTree.Types 
+( PVal(..)
+, rsValue
+, rwValue
+, rdValue
+, Update(..)
+, Module(..)
+, mkModule
+, MIB(..)
+, mkObject
+, mkObjectType
+, isObjectType
+, Parent
+, Name
+, unregister
+, ou
+, moduleOID
+, MIBTree
+, buildTree
+, register
+, isWritable
+, zipper
+, IUpdate
+, IValue
+, ContextedValue(..)
+)
+where
 
 import Control.Monad.State.Strict 
 import Control.Concurrent.MVar
@@ -24,6 +50,12 @@ data PVal = Read
             , testSetAIO     :: Value -> IO TestError
             , undoSetAIO     :: Value -> IO UndoError
             }
+
+-- | Update, for rebuild oid tree in runtime
+newtype Update = Update { unUpdate :: forall  m . (Monad m, MonadIO m, Functor m) =>  m [MIB] }
+
+type IValue = ContextedValue PVal  
+type IUpdate = ContextedValue Update 
 
 instance Show PVal where
     show Read{} = "Read Value"
@@ -67,18 +99,11 @@ instance Show a => Show (ContextedValue a) where
     show (Contexted (_, Just c, Just v)) = "- contexted leaf " <> show c <> show v
     show _ = "bad node"
 
--- | Update, for rebuild oid tree in runtime
-newtype Update = Update { unUpdate ::forall  m . (Monad m, MonadIO m, Functor m) =>  m [MIB]}
-
-type IValue = ContextedValue PVal  
-type IUpdate = ContextedValue Update 
-
 -- | internal state for build agentx submodule
 data Module = Module
   { _zipper        :: Zipper Tree IValue 
   , _ou            :: Zipper Tree IUpdate
   , _moduleOID     :: OID
-  , _findOid       :: OID
   , _register      :: MVar [MIB]
   , _unregister    :: MVar [MIB]
   } 
@@ -86,7 +111,7 @@ data Module = Module
 mkLabel ''Module
 
 instance Show Module where
-    show (Module z ou' _ _ _ _) = show z ++ "\n" ++ show ou'
+    show (Module z ou' _ _ _) = show z ++ "\n" ++ show ou'
 
 -- | MIBTree, state transformer, with Module under ground
 type MIBTree = StateT Module  
@@ -101,7 +126,7 @@ mkModule :: (Monad m, MonadIO m, Functor m) =>
 mkModule moduleOid mibs = do
     r <- liftIO $ newEmptyMVar
     unr <- liftIO $ newEmptyMVar
-    return $ Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid [] r unr
+    return $ Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid r unr
 
 buildTree :: [MIB] -> (Tree IValue, Tree IUpdate)
 buildTree ms = foldMap singleton $ fillOid ms
@@ -191,6 +216,5 @@ toC i mc mv = Contexted (i, mc, mv)
 
 zero :: Integer -> ContextedValue a
 zero i = Contexted (i, Nothing, Nothing)
-
 
 

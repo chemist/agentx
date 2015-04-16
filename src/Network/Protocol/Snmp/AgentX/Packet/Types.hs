@@ -3,24 +3,84 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 
-module Network.Protocol.Snmp.AgentX.Packet.Types where
+module Network.Protocol.Snmp.AgentX.Packet.Types 
+( PDU(..)
+, Version
+, SessionID
+, TransactionID
+, PacketID
+, econvert
+, Context(..)
+, Tag(..)
+, TaggedError(..)
+, TestError(..)
+, CommitError(..)
+, RError(..)
+, UndoError(..)
+, SysUptime
+, Index
+, MaxRepeaters
+, NonRepeaters
+-- ** Packet
+, Packet
+-- *** constructor
+, mkPacket
+-- *** lenses
+, flags
+, version 
+, pdu
+, sid
+, pid
+, tid
+-- ** SearchRange 
+, SearchRange
+-- *** constructor
+, mkSearchRange
+-- *** lenses
+, startOID
+, endOID
+, include
+-- ** VarBind containt Value and OID
+, VarBind
+-- *** constructor
+, mkVarBind
+-- *** lenses
+, vboid
+, vbvalue
+-- ** Flags 
+, Flags
+-- *** constructor
+, mkFlags
+-- *** lenses
+, instanceRegistration
+, newIndex
+, anyIndex
+, nonDefaultContext
+, bigEndian
+)
+where
 
 import Data.Label
 
 import Data.Word
 import Data.ByteString (ByteString)
 import Data.String
+import Data.Default
 
 import Network.Protocol.Snmp (Value(..), OID)
 
-type Version = Word8
+newtype Version = Version Word8 deriving (Show, Eq, Enum, Bounded, Ord)
 
 newtype SessionID = SessionID Word32 deriving (Show, Eq, Enum, Bounded, Ord)
 
 newtype TransactionID = TransactionID Word32 deriving (Show, Eq, Ord, Enum, Bounded)
 
 newtype PacketID = PacketID Word32 deriving (Show, Eq, Ord, Enum, Bounded)
+
+econvert :: (Enum a, Enum b) => a -> b
+econvert = toEnum . fromEnum
 
 -- | rfc 2571 section 3.3.1, rfc 2741 section 6.1.1 Context
 newtype Context = Context ByteString deriving (Show, Ord, Eq, IsString)
@@ -145,6 +205,9 @@ data Packet = Packet
   , _pid     :: PacketID 
   } deriving Show
 
+mkPacket :: Version -> PDU -> Flags -> SessionID -> TransactionID -> PacketID -> Packet
+mkPacket = Packet
+
 data Flags = Flags 
   { _instanceRegistration :: Bool 
   , _newIndex             :: Bool
@@ -152,6 +215,9 @@ data Flags = Flags
   , _nonDefaultContext    :: Bool
   , _bigEndian            :: Bool
   } deriving (Show)
+
+mkFlags :: Bool -> Bool -> Bool -> Bool -> Bool -> Flags
+mkFlags = Flags
 
 -- | rfc 2741, section5.2 
 --
@@ -165,6 +231,9 @@ data SearchRange = SearchRange
   , _include  :: Bool
   } deriving (Show, Eq)
 
+mkSearchRange :: OID -> OID -> Bool -> SearchRange
+mkSearchRange = SearchRange
+
 -- | rfc 2741, section 5.4
 data VarBind = VarBind 
   { _vboid   :: OID 
@@ -172,15 +241,16 @@ data VarBind = VarBind
   } deriving (Show, Eq)
 
 -- | constructor for VarBind
-varbind :: OID -> Value -> VarBind
-varbind oi v = VarBind oi v
+mkVarBind :: OID -> Value -> VarBind
+mkVarBind = VarBind 
 
+{--
 data ST = ST 
   { _packet   :: Packet
   , _bodySize :: Word32
   } 
-
-mkLabels [''Packet, ''Flags, ''VarBind, ''SearchRange, ''ST ]
+  --}
+mkLabels [''Packet, ''Flags, ''VarBind, ''SearchRange ]
 
 instance Tag Reason Word8 where
     tag Other         = 1
@@ -318,6 +388,9 @@ instance Tag Value Word16 where
     tag (EndOfMibView)      = 130
     unTag _ = undefined
 
+instance Default Flags where
+    def = mkFlags False False False False False
 
-
+instance Default Version where
+    def = Version 1
 
