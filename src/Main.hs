@@ -3,10 +3,7 @@
 {-# LANGUAGE RankNTypes #-}
 module Main where
 
-import Network.Protocol.Snmp.AgentX (Value(..))
-import Network.Protocol.Snmp.AgentX.MIBTree
-import Network.Protocol.Snmp.AgentX.Service
-import Network.Protocol.Snmp.AgentX.Packet
+import Network.Protocol.Snmp.AgentX 
 import Network.Info
 import qualified Data.ByteString as BS
 import Data.ByteString (ByteString)

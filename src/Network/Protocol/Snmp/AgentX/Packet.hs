@@ -1,44 +1,64 @@
 module Network.Protocol.Snmp.AgentX.Packet ( 
--- * Packet building
+-- ** Packet 
   Packet
--- ** create Packet
+-- *** constructor
 , mkPacket
--- ** lenses for  Packet
+-- *** lenses for  Packet
 , pdu
 , flags
 , tid
 , pid
 , sid
--- ** types used in Packet
+-- *** types used in Packet
 , PDU(..)
 , PacketID
 , SessionID
 , TransactionID
+-- ** Flags 
 , Flags
--- ** create Flags
+, InstanceRegistration 
+, NewIndex 
+, AnyIndex 
+, NonDefaultContext 
+, BigEndian 
+-- *** constructor
 , mkFlags
--- * other types
+-- *** lenses
+, instanceRegistration
+, newIndex
+, anyIndex
+, nonDefaultContext
+, bigEndian
+-- ** SearchRange 
 , SearchRange
-, include 
-, startOID 
-, endOID  
+-- *** constructor
+, mkSearchRange
+-- *** lenses
+, startOID
+, endOID
+, include
+-- ** VarBind 
+, VarBind
+-- *** constructor
+, mkVarBind
+-- *** lenses
+, vboid
+, vbvalue
+-- ** other types
 , Context
 , SysUptime
-, VarBind
-, mkVarBind
-, vbvalue
-, vboid
 , Index
 , NonRepeaters
 , MaxRepeaters
--- * types for errors 
+-- ** types for errors 
 , RError(..)
 , UndoError(..)
 , TestError(..)
 , CommitError(..)
 , TaggedError(..)
--- * other
+-- ** helpers
 , bodySizeFromHeader
+, econvert
 )
 where
 

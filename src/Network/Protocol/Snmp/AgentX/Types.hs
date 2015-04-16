@@ -1,4 +1,11 @@
-module Network.Protocol.Snmp.AgentX.Types where
+module Network.Protocol.Snmp.AgentX.Types 
+( SubAgentState(..)
+, Transaction(..)
+, bridgeToBase
+, SubAgent
+, TransactionState(..)
+)
+where
 
 import Control.Monad.State.Strict
 import Control.Monad.Reader
@@ -24,7 +31,7 @@ data TransactionState = TestSetT
                       | CleanupSetT
                       deriving (Show, Eq, Ord, Enum)
 
-data ST = ST
+data SubAgentState = SubAgentState
   { sysuptime :: MVar SysUptime
   , packetCounter :: MVar PacketID
   , mibs :: MVar Module 
@@ -33,10 +40,11 @@ data ST = ST
   , transactions :: MVar (Map TransactionID Transaction)
   }
 
-type AgentT = ReaderT ST IO
+type SubAgent = ReaderT SubAgentState IO
 
 
-bridgeToBase :: MIBTree IO a -> AgentT a
+-- | run MIBTree in SubAgent context
+bridgeToBase :: MIBTree IO a -> SubAgent a
 bridgeToBase f = do
     st <- mibs <$> ask
     lift $ modifyMVar st $ \x -> swap <$> runStateT f x

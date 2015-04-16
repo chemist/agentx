@@ -99,7 +99,7 @@ instance Show a => Show (ContextedValue a) where
     show (Contexted (_, Just c, Just v)) = "- contexted leaf " <> show c <> show v
     show _ = "bad node"
 
--- | internal state for build agentx submodule
+-- | internal state for build SNMP submodule
 data Module = Module
   { _zipper        :: Zipper Tree IValue 
   , _ou            :: Zipper Tree IUpdate
@@ -117,8 +117,6 @@ instance Show Module where
 type MIBTree = StateT Module  
 
 -- | Constructor for Module
---
---
 mkModule :: (Monad m, MonadIO m, Functor m) => 
     OID -- ^ base module OID
   -> [MIB] -- ^ all MIB for create module

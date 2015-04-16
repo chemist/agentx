@@ -51,7 +51,7 @@ library
   exposed-modules:     Network.Protocol.Snmp.AgentX, Network.Protocol.Snmp.AgentX.MIBTree, Network.Protocol.Snmp.AgentX.Packet
   other-modules: Network.Protocol.Snmp.AgentX.MIBTree.Tree, Network.Protocol.Snmp.AgentX.MIBTree.MIBTree, Network.Protocol.Snmp.AgentX.MIBTree.Types,
                  Network.Protocol.Snmp.AgentX.Packet.Binary, Network.Protocol.Snmp.AgentX.Packet.Get, Network.Protocol.Snmp.AgentX.Packet.Put, 
-                 Network.Protocol.Snmp.AgentX.Packet.Types     
+                 Network.Protocol.Snmp.AgentX.Packet.Types      
   -- other-extensions:    
   build-depends:       base >=4.6 && <4.8
                      , snmp

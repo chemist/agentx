@@ -1,23 +1,24 @@
 module Network.Protocol.Snmp.AgentX 
-( MIBTree
-, MIB
+( MIB
 , Value(..)
+, PVal(..)
+, rwValue
+, rsValue
+, rdValue
+, Update(..)
+, mkObject
+, mkObjectType
 , CommitError(..)
 , TestError(..)
 , UndoError(..)
 , Context
-, mkModule
 , agent
-, genError
 )
 where
 
-import Network.Protocol.Snmp (Value(..))
-import Network.Protocol.Snmp.AgentX.Service (agent)
+import Network.Protocol.Snmp 
+import Network.Protocol.Snmp.AgentX.Service 
 import Network.Protocol.Snmp.AgentX.MIBTree 
-import Network.Protocol.Snmp.AgentX.Packet (TestError(..), CommitError(..), UndoError(..), Context)
-
-genError :: TestError
-genError = GenError
+import Network.Protocol.Snmp.AgentX.Packet 
 
 

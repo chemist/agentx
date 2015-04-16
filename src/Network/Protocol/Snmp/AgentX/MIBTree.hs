@@ -1,37 +1,43 @@
 {-# LANGUAGE RankNTypes #-}
 module Network.Protocol.Snmp.AgentX.MIBTree ( 
--- * Create agentx submodule
   MIBTree
+-- ** Module
+, Module
+-- *** create and init Module
+, mkModule
 , initModule
 , initAndRegister
-, Module
-, mkModule
--- ** functions for work with MIBTree
-, findOne
-, findMany
-, findNext
-, findManyNext
--- * Create MIB
-, Parent
-, Name
-, MIB
-, oi
-, val
-, context
-, mkObject
-, Update(..)
-, mkObjectType
-, isObjectType
-, PVal(..)
-, isWritable
-, rsValue
-, rdValue
-, rwValue
--- * helpers
+-- *** lenses for Module
 , moduleOID
 , register
 , unregister
 , zipper
+, ou
+-- *** functions for work with MIBTree
+, findOne
+, findMany
+, findNext
+, findManyNext
+-- ** MIB
+, Parent
+, Name
+, MIB
+-- *** lenses
+, oi
+, val
+, context
+-- *** constructors
+, mkObject
+, mkObjectType
+, isObjectType
+-- ** raw values for build SNMP subagent
+, Update(..)
+, PVal(..)
+, isWritable
+-- *** helpers for create PVal
+, rsValue
+, rdValue
+, rwValue
 )
 where
 import Network.Protocol.Snmp.AgentX.MIBTree.MIBTree

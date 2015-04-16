@@ -25,7 +25,6 @@ import Data.Maybe
 import Data.Default
 import qualified Data.Map.Strict as Map 
 import qualified Data.Label as DL
-import Prelude 
 
 import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Packet 
@@ -34,7 +33,11 @@ import qualified Network.Protocol.Snmp.AgentX.MIBTree as MIBTree
 import Network.Protocol.Snmp.AgentX.Handlers
 import Network.Protocol.Snmp.AgentX.Types
 
-agent :: String -> OID -> [MIB] -> IO ()
+-- | start agent
+agent :: FilePath  -- ^ path to socket
+      -> OID -- ^ base oid
+      -> [MIB] -- ^ MIBs
+      -> IO ()
 agent path o tree = bracket (openSocket path)
                             close
                             (runAgent o tree)
@@ -51,7 +54,7 @@ runAgent modOid tree socket'  = do
     mod' <- mkModule modOid tree 
     m <- newMVar =<< flip execStateT mod' initAndRegister 
     ts <- newMVar Map.empty
-    let st = ST s p m socket' i ts
+    let st = SubAgentState s p m socket' i ts
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
@@ -76,19 +79,19 @@ runAgent modOid tree socket'  = do
 ---------------------------------------------------------------------------
 -- Pipes eval 
 ---------------------------------------------------------------------------
-run :: ST -> Effect AgentT a -> IO a
+run :: SubAgentState -> Effect SubAgent a -> IO a
 run s eff = runEffect $ runReaderP s eff
 
-server :: Consumer Packet AgentT ()
+server :: Consumer Packet SubAgent ()
 server = forever $ do
     m <- await
     -- ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
     ask >>= flip fiber (yield m >-> server' >-> output)
 
-fiber :: MonadIO m => ST -> Effect AgentT () -> m ThreadId
+fiber :: MonadIO m => SubAgentState -> Effect SubAgent () -> m ThreadId
 fiber st = liftIO . forkIO . run st
 
-input :: Producer Packet AgentT ()
+input :: Producer Packet SubAgent ()
 input = forever $ do
     sock' <- sock <$> ask
     h <- liftIO $ recv sock' 20
@@ -96,14 +99,14 @@ input = forever $ do
 --    liftIO $ print $ (decode  $ h <> b :: Packet )
     yield $ decode $ h <> b
 
-output :: Consumer Packet AgentT ()
+output :: Consumer Packet SubAgent ()
 output = forever $ do
     sock' <- sock <$> ask
     bs <- await
 --    liftIO $ print $ (decode . encode $ bs :: Packet )
     void . liftIO $ send sock' (encode bs)
 
-sortInput :: Consumer Packet AgentT () -> Consumer Packet AgentT () -> Consumer Packet AgentT ()
+sortInput :: Consumer Packet SubAgent () -> Consumer Packet SubAgent () -> Consumer Packet SubAgent ()
 sortInput requests responses = forever $ await >>= sortInput'
     where
         sortInput' m 
@@ -113,22 +116,22 @@ sortInput requests responses = forever $ await >>= sortInput'
                             Response{} -> True
                             _ -> False
 
-server' :: Pipe Packet Packet AgentT ()
+server' :: Pipe Packet Packet SubAgent ()
 server' = forever $ await >>= lift . route >>= yieldOnlyJust 
     where
         yieldOnlyJust Nothing = return ()
         yieldOnlyJust (Just resp) = yield resp
 
-openSession :: Pipe Packet Packet AgentT ()
+openSession :: Pipe Packet Packet SubAgent ()
 openSession = do
     openPacket <- lift open
     client openPacket
 
-registrator :: Bool -> Pipe Packet Packet AgentT () 
+registrator :: Bool -> Pipe Packet Packet SubAgent () 
 registrator True = mapM_ client =<< lift register
 registrator False = mapM_ client =<< lift unregister
 
-client :: Packet -> Pipe Packet Packet AgentT ()
+client :: Packet -> Pipe Packet Packet SubAgent ()
 client p = do
     pid' <- lift getPid
     sid' <- lift getSid
@@ -139,16 +142,16 @@ client p = do
     maybe (lift . setSid . (DL.get sid) $ resp) (const $ return ()) sid''
     -- liftIO $ print $ "response: " <> show p
 
-_dp :: String -> Pipe Packet Packet AgentT ()
+_dp :: String -> Pipe Packet Packet SubAgent ()
 _dp label = forever $ do
     i <- await
     liftIO $ print $ label ++ " " ++ show i
     yield i
 
 ---------------------------------------------------------------------------
--- AgentT eval 
+-- SubAgent eval 
 ---------------------------------------------------------------------------
-register :: AgentT [Packet]
+register :: SubAgent [Packet]
 register = do
     s <- mibs <$> ask
     m  <- liftIO $ readMVar s
@@ -160,7 +163,7 @@ register = do
             let pduList = Register (context m) minBound (toEnum 127) minBound (oi m) Nothing
             in mkPacket def pduList def minBound minBound minBound
 
-unregister :: AgentT [Packet]
+unregister :: SubAgent [Packet]
 unregister = do
     s <- mibs <$> ask
     m <- liftIO $ readMVar s
@@ -172,7 +175,7 @@ unregister = do
             let pduList = Unregister (context m) (toEnum 127) minBound (oi m) Nothing
             in mkPacket def pduList def  minBound minBound minBound
 
-open :: AgentT Packet
+open :: SubAgent Packet
 open = do
     s <- mibs <$> ask
     m <- liftIO $ readMVar s
@@ -182,20 +185,20 @@ open = do
 ping :: Packet
 ping = mkPacket def (Ping Nothing) def minBound minBound minBound 
 
-getSid :: AgentT SessionID
+getSid :: SubAgent SessionID
 getSid = do
     sesRef <- sessions <$> ask
     s <- liftIO $ tryReadMVar sesRef
     return $ fromMaybe minBound s
 
-setSid :: SessionID -> AgentT ()
+setSid :: SessionID -> SubAgent ()
 setSid sid' = do
     sesRef <- sessions <$> ask
     liftIO $ putMVar sesRef sid'
     liftIO $ print $ "set sid " ++ show sid'
     
 
-getPid :: AgentT PacketID
+getPid :: SubAgent PacketID
 getPid = do
     pidRef <- packetCounter <$> ask
     liftIO $ modifyMVar pidRef $ \x -> return (succ x, succ x)

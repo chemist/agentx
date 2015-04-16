@@ -53,6 +53,11 @@ module Network.Protocol.Snmp.AgentX.Packet.Types
 , Flags
 -- *** constructor
 , mkFlags
+, InstanceRegistration 
+, NewIndex 
+, AnyIndex 
+, NonDefaultContext 
+, BigEndian 
 -- *** lenses
 , instanceRegistration
 , newIndex
@@ -71,20 +76,26 @@ import Data.Default
 
 import Network.Protocol.Snmp (Value(..), OID)
 
+-- | protocol version (const 1 by default)
 newtype Version = Version Word8 deriving (Show, Eq, Enum, Bounded, Ord)
 
+-- | session id in header, rfc 2741, section 6.1
 newtype SessionID = SessionID Word32 deriving (Show, Eq, Enum, Bounded, Ord)
 
+-- | transaction id in header, rfc 2741, section 6.1
 newtype TransactionID = TransactionID Word32 deriving (Show, Eq, Ord, Enum, Bounded)
 
+-- | packet id in header, rfc 2741, section 6.1
 newtype PacketID = PacketID Word32 deriving (Show, Eq, Ord, Enum, Bounded)
 
+-- | helper for convert 
 econvert :: (Enum a, Enum b) => a -> b
 econvert = toEnum . fromEnum
 
 -- | rfc 2571 section 3.3.1, rfc 2741 section 6.1.1 Context
 newtype Context = Context ByteString deriving (Show, Ord, Eq, IsString)
 
+-- | rfc 2741, section 6.2.2, Error status in agentx-close-pdu
 data Reason = Other
             | ParseError
             | ProtocolError
@@ -110,7 +121,7 @@ data RError = NoAgentXError
             | ProcessingError
             deriving (Show, Eq)
 
-            -- 7.2.4.1
+-- | result for testSetAIO (rfc 2741, section 7.2.4.1)
 data TestError 
             = NoTestError
             | TooBig
@@ -130,13 +141,13 @@ data TestError
             | InconsistentName
             deriving (Show, Eq)
 
-            -- 7.2.4.2
+-- | result for commitSetAIO (rfc 2741, section 7.2.4.2)
 data CommitError
             = NoCommitError
             | CommitFailed
             deriving (Show, Eq) 
                   
-            -- 7.2.4.3
+-- | result for undoSetAIO (rfc 2741, section 7.2.4.3)
 data UndoError
             = NoUndoError
             | UndoFailed
@@ -153,6 +164,7 @@ type Index = Word16
 type NonRepeaters = Word16
 type MaxRepeaters = Word16
 
+-- | Error with Tag instance
 data TaggedError = forall a. (Show a, Eq a, Tag a Word16) => Tagged a 
 
 instance Tag TaggedError Word16 where
@@ -191,6 +203,7 @@ data PDU = Open Timeout OID Description -- ^ section 6.2.1
          deriving (Show, Eq)
 
 
+-- | class for convert Errors to Word* and Word* to Errors
 class Tag a b where
     tag :: a -> b
     unTag :: b -> a
@@ -208,33 +221,36 @@ data Packet = Packet
 mkPacket :: Version -> PDU -> Flags -> SessionID -> TransactionID -> PacketID -> Packet
 mkPacket = Packet
 
+-- | header flags, rfc 2741, section 6.1
 data Flags = Flags 
-  { _instanceRegistration :: Bool 
-  , _newIndex             :: Bool
-  , _anyIndex             :: Bool
-  , _nonDefaultContext    :: Bool
-  , _bigEndian            :: Bool
+  { _instanceRegistration :: InstanceRegistration 
+  , _newIndex             :: NewIndex
+  , _anyIndex             :: AnyIndex
+  , _nonDefaultContext    :: NonDefaultContext
+  , _bigEndian            :: BigEndian
   } deriving (Show)
 
-mkFlags :: Bool -> Bool -> Bool -> Bool -> Bool -> Flags
+type InstanceRegistration = Bool
+type NewIndex = Bool
+type AnyIndex = Bool
+type NonDefaultContext = Bool
+type BigEndian = Bool
+
+mkFlags :: InstanceRegistration -> NewIndex -> AnyIndex -> NonDefaultContext -> BigEndian -> Flags
 mkFlags = Flags
 
--- | rfc 2741, section5.2 
---
--- with lenses
--- startOID
--- endOID
--- include
+-- | used for getnext and other requests (rfc 2741, section5.2 )
 data SearchRange = SearchRange 
   { _startOID :: OID 
   , _endOID   :: OID
   , _include  :: Bool
   } deriving (Show, Eq)
 
+-- | create SearchRange
 mkSearchRange :: OID -> OID -> Bool -> SearchRange
 mkSearchRange = SearchRange
 
--- | rfc 2741, section 5.4
+-- | containt oid and value (rfc 2741, section 5.4)
 data VarBind = VarBind 
   { _vboid   :: OID 
   , _vbvalue :: Value 
@@ -244,12 +260,6 @@ data VarBind = VarBind
 mkVarBind :: OID -> Value -> VarBind
 mkVarBind = VarBind 
 
-{--
-data ST = ST 
-  { _packet   :: Packet
-  , _bodySize :: Word32
-  } 
-  --}
 mkLabels [''Packet, ''Flags, ''VarBind, ''SearchRange ]
 
 instance Tag Reason Word8 where

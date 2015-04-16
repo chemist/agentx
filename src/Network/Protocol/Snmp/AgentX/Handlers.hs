@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Network.Protocol.Snmp.AgentX.Handlers where
+module Network.Protocol.Snmp.AgentX.Handlers 
+( route )
+where
 
 import Control.Applicative
 import Control.Monad.State
@@ -14,7 +16,7 @@ import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Packet
 import Network.Protocol.Snmp.AgentX.Types
 
-makePdu :: [Either TaggedError VarBind] -> AgentT (Maybe PDU)
+makePdu :: [Either TaggedError VarBind] -> SubAgent (Maybe PDU)
 makePdu xs = do
   now <- uptime
   let (good, index, firstBad) = splitByError xs 
@@ -35,13 +37,14 @@ splitByError xs =
             let splitted = splitByError' xs'
             in (x : fst splitted, snd splitted)
 
-route :: Packet -> AgentT (Maybe Packet)
+-- | processing request, return response
+route :: Packet -> SubAgent (Maybe Packet)
 route packet = route' pdu' >>= return . fmap setPdu
     where
     pdu' = DL.get pdu packet
     setPdu = flip (DL.set pdu) packet
     transactionId = DL.get tid packet
-    route' :: PDU -> AgentT (Maybe PDU)
+    route' :: PDU -> SubAgent (Maybe PDU)
     route' (Get mcontext oids) = do
         r <- makePdu =<< getHandler oids mcontext
         bridgeToBase $ do
@@ -79,21 +82,21 @@ route packet = route' pdu' >>= return . fmap setPdu
         liftIO $ print packet
         makePdu =<< return [Left (Tagged RequestDenied)]
 
-uptime :: AgentT SysUptime
+uptime :: SubAgent SysUptime
 uptime = do
     nowref <- sysuptime <$> ask
     liftIO . readMVar $ nowref
 
-getHandler :: [OID] -> Maybe Context -> AgentT [Either TaggedError VarBind]
+getHandler :: [OID] -> Maybe Context -> SubAgent [Either TaggedError VarBind]
 getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findMany xs mc))
 
-getNextHandler :: Maybe Context -> [SearchRange] -> AgentT [Either TaggedError VarBind]
+getNextHandler :: Maybe Context -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
 getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findManyNext xs mc))
 
-getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> AgentT [Either TaggedError VarBind]
+getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
 getBulkHandler = undefined
 
-testSetHandler :: Maybe Context -> [VarBind] -> TransactionID -> AgentT [Either TaggedError VarBind]
+testSetHandler :: Maybe Context -> [VarBind] -> TransactionID -> SubAgent [Either TaggedError VarBind]
 testSetHandler mcontext varBindList transactionId = do
     tr <- transactions <$> ask
     result <- mapM testFun varBindList
@@ -108,6 +111,7 @@ testSetHandler mcontext varBindList transactionId = do
                       then Right v
                       else Left (Tagged testResult)
 
+-- | convert MIB to VarBind
 mibToVarBind :: (Monad m, MonadIO m, Functor m) => MIB -> m VarBind
 mibToVarBind m = do
     v <- liftIO $ readAIO (val m) 
