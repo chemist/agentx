@@ -16,7 +16,6 @@ module Network.Protocol.Snmp.AgentX.MIBTree.Types
 , isObjectType
 , Parent
 , Name
-, unregister
 , ou
 , moduleOID
 , MIBTree
@@ -104,14 +103,13 @@ data Module = Module
   { _zipper        :: Zipper Tree IValue 
   , _ou            :: Zipper Tree IUpdate
   , _moduleOID     :: OID
-  , _register      :: MVar [MIB]
-  , _unregister    :: MVar [MIB]
+  , _register      :: MVar ([(OID, Maybe Context)], [(OID, Maybe Context)])
   } 
 
 mkLabel ''Module
 
 instance Show Module where
-    show (Module z ou' _ _ _) = show z ++ "\n" ++ show ou'
+    show (Module z ou' _ _) = show z ++ "\n" ++ show ou'
 
 -- | MIBTree, state transformer, with Module under ground
 type MIBTree = StateT Module  
@@ -122,9 +120,8 @@ mkModule :: (Monad m, MonadIO m, Functor m) =>
   -> [MIB] -- ^ all MIB for create module
   -> m Module 
 mkModule moduleOid mibs = do
-    r <- liftIO $ newEmptyMVar
-    unr <- liftIO $ newEmptyMVar
-    return $ Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid r unr
+    reg <- liftIO $ newEmptyMVar
+    return $ Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid reg
 
 buildTree :: [MIB] -> (Tree IValue, Tree IUpdate)
 buildTree ms = foldMap singleton $ fillOid ms

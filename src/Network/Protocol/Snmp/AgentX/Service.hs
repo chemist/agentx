@@ -28,7 +28,7 @@ import qualified Data.Label as DL
 
 import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Packet 
-import Network.Protocol.Snmp.AgentX.MIBTree hiding (register, unregister)
+import Network.Protocol.Snmp.AgentX.MIBTree hiding (register)
 import qualified Network.Protocol.Snmp.AgentX.MIBTree as MIBTree
 import Network.Protocol.Snmp.AgentX.Handlers
 import Network.Protocol.Snmp.AgentX.Types
@@ -59,21 +59,20 @@ runAgent modOid tree socket'  = do
     sortPid <- fiber st $ input >-> sortInput reqTo respTo
     -- open session 
     run st $ resp >-> openSession >-> output
-    -- start register fiber
-    regPid <- fiber st $ resp >-> registrator True >->  output
-    -- start unregister fiber
-    unregPid <- fiber st $ resp >-> registrator False >-> output
+    -- start register, unregister fiber
+    regPid <- fiber st $ resp >-> registrator >->  output
     -- start server fiber
     serverPid <-  fiber st $ req >-> server
     -- start agent fiber
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
         liftIO $ threadDelay 5000000
+    regPidTimer <- registerTimer st
     _ <-  getLine :: IO String
---     putMVar unreg (toList tree)
     liftIO $ putStrLn "unregister all MIB"
+    evalStateT unregisterFullTree =<< readMVar (mibs st)
     liftIO $ threadDelay 1000000
-    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, unregPid, timer] -- p2,p3,p4,p5, 
+    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, timer, regPidTimer] -- p2,p3,p4,p5, 
 
 initAgent :: OID -> [MIB] -> Socket -> IO SubAgentState
 initAgent modOid tree socket' = do
@@ -81,10 +80,15 @@ initAgent modOid tree socket' = do
     sessionsMVar <- newEmptyMVar
     packetCounterMVar <- newMVar minBound
     mod' <- mkModule modOid tree 
-    moduleMVar <- newMVar =<< flip execStateT mod' initAndRegister 
+    moduleMVar <- newMVar =<< flip execStateT mod' (initModule >> registerFullTree) 
     transactionsMVar <- newMVar Map.empty
     return $ SubAgentState sysUptimeMVar packetCounterMVar moduleMVar socket' sessionsMVar transactionsMVar
 
+registerTimer :: SubAgentState -> IO ThreadId
+registerTimer st = forkIO . forever $ do
+    oldTree <- evalStateT askTree =<< readMVar (mibs st)
+    liftIO $ threadDelay 1000000
+    evalStateT (flip regByDiff oldTree =<< askTree) =<< readMVar (mibs st)
 ---------------------------------------------------------------------------
 -- Pipes eval 
 ---------------------------------------------------------------------------
@@ -105,14 +109,12 @@ input = forever $ do
     sock' <- sock <$> ask
     h <- liftIO $ recv sock' 20
     b <- liftIO $ recv sock' (bodySizeFromHeader h)
---    liftIO $ print $ (decode  $ h <> b :: Packet )
     yield $ decode $ h <> b
 
 output :: Consumer Packet SubAgent ()
 output = forever $ do
     sock' <- sock <$> ask
     bs <- await
---    liftIO $ print $ (decode . encode $ bs :: Packet )
     void . liftIO $ send sock' (encode bs)
 
 sortInput :: Consumer Packet SubAgent () -> Consumer Packet SubAgent () -> Consumer Packet SubAgent ()
@@ -136,9 +138,8 @@ openSession = do
     openPacket <- lift open
     client openPacket
 
-registrator :: Bool -> Pipe Packet Packet SubAgent () 
-registrator True = mapM_ client =<< lift register
-registrator False = mapM_ client =<< lift unregister
+registrator :: Pipe Packet Packet SubAgent () 
+registrator = forever $ mapM_ client =<< lift register
 
 client :: Packet -> Pipe Packet Packet SubAgent ()
 client p = do
@@ -149,7 +150,6 @@ client p = do
     sessionsRef <- sessions <$> ask
     sid'' <- liftIO $ tryReadMVar sessionsRef
     maybe (lift . setSid . (DL.get sid) $ resp) (const $ return ()) sid''
-    -- liftIO $ print $ "response: " <> show p
 
 _dp :: String -> Pipe Packet Packet SubAgent ()
 _dp label = forever $ do
@@ -164,24 +164,18 @@ register :: SubAgent [Packet]
 register = do
     s <- mibs <$> ask
     m  <- liftIO $ readMVar s
-    ls <- liftIO $ takeMVar (DL.get MIBTree.register m)
-    return $ map mibToPackets ls
+    (toReg, toUnReg) <- liftIO $ takeMVar (DL.get MIBTree.register m)
+    liftIO $ mapM_ (\x -> print ("R " ++ show x)) toReg
+    liftIO $ mapM_ (\x -> print ("UR " ++ show x)) toUnReg
+    return $ map toRegPacket toReg <> map toUnRegPacket toUnReg
         where
-        mibToPackets :: MIB -> Packet
-        mibToPackets m =
-            let pduList = Register (context m) minBound (toEnum 127) minBound (oi m) Nothing
+        toRegPacket :: (OID, Maybe Context) -> Packet
+        toRegPacket m =
+            let pduList = Register (snd m) minBound (toEnum 127) minBound (fst m) Nothing
             in mkPacket def pduList def minBound minBound minBound
-
-unregister :: SubAgent [Packet]
-unregister = do
-    s <- mibs <$> ask
-    m <- liftIO $ readMVar s
-    ls <- liftIO $ takeMVar (DL.get MIBTree.unregister m)
-    return $ map mibToPackets ls
-        where
-        mibToPackets :: MIB -> Packet
-        mibToPackets m =
-            let pduList = Unregister (context m) (toEnum 127) minBound (oi m) Nothing
+        toUnRegPacket :: (OID, Maybe Context) -> Packet
+        toUnRegPacket m =
+            let pduList = Unregister (snd m) (toEnum 127) minBound (fst m) Nothing
             in mkPacket def pduList def  minBound minBound minBound
 
 open :: SubAgent Packet

@@ -68,13 +68,12 @@ route packet = route' pdu' >>= return . fmap setPdu
               result <- liftIO $ commitSetAIO (val mib) (DL.get vbvalue varbind')
               return (varbind', result)
     route' CleanupSet = do
-        liftIO $ print packet
         tr <- transactions <$> ask
         maybeTransaction <-  Map.lookup transactionId <$> (liftIO . readMVar $ tr)
         let oidsList = map (DL.get vboid) $ fromMaybe [] (vblist `fmap` maybeTransaction)
         let mcontext = join $ tcontext `fmap` maybeTransaction
         liftIO . modifyMVar_ tr $ return . Map.delete transactionId
-        void $ bridgeToBase (wrap (findMany oidsList mcontext))
+        void $ bridgeToBase (regWrapper (findMany oidsList mcontext))
         return Nothing
     
     route' _ = do
@@ -87,10 +86,10 @@ uptime = do
     liftIO . readMVar $ nowref
 
 getHandler :: [OID] -> Maybe Context -> SubAgent [Either TaggedError VarBind]
-getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (wrap (findMany xs mc)))
+getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findMany xs mc))
 
 getNextHandler :: Maybe Context -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
-getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (wrap (findManyNext xs mc)))
+getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findManyNext xs mc))
 
 getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
 getBulkHandler = undefined

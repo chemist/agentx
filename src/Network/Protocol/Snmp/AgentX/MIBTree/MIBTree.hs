@@ -2,19 +2,22 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Network.Protocol.Snmp.AgentX.MIBTree.MIBTree 
 ( initModule
-, initAndRegister
+, registerFullTree
+, unregisterFullTree
 , findOne
 , findMany
 , findNext
 , findClosest
 , findManyNext
-, wrap
+, regWrapper
+, askTree
+, regByDiff
 )
 where
 
 import Data.Maybe 
 import Control.Applicative
-import Control.Monad.State.Strict (MonadIO, forM_, lift, get, put, liftIO)
+import Control.Monad.State.Strict (MonadIO, forM_, lift, get, put, liftIO, when)
 import Network.Protocol.Snmp.AgentX.MIBTree.Types hiding (context)
 import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
 import Network.Protocol.Snmp (OID, Value(EndOfMibView, NoSuchInstance, NoSuchObject))
@@ -47,24 +50,40 @@ initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou
                 modify zipper $  const (mibs, [])
                 modify ou $ const (updates, [])
                 initModule
-                Module (z,_) (o,_) _ _ _ <- get
+                Module (z,_) (o,_) _ _ <- get
                 put old
                 modify zipper $ top . attach z
                 modify ou $ top . attach o
 
--- | init module and register MIBs in snmp server
-initAndRegister :: (Monad m, MonadIO m, Functor m) => MIBTree m ()
-initAndRegister = do
-    initModule
-    Module z _ b mv _<- get 
-    liftIO $ print z
-    liftIO $ putMVar mv (addBaseOid b $ toRegistrationList z)
+-- | register all MIBs in snmp server
+registerFullTree :: (Monad m, MonadIO m, Functor m) => MIBTree m ()
+registerFullTree = do
+    z <- fst . top <$> gets zipper 
+    mv <- gets register
+    b <- gets moduleOID
+    liftIO $ putMVar mv (addBaseOid b $ regPair z Empty)
 
-addBaseOid :: OID -> [MIB] -> [MIB]
-addBaseOid b = map fun
+unregisterFullTree :: (Monad m, MonadIO m, Functor m) => MIBTree m ()
+unregisterFullTree = do
+    z <- fst . top <$> gets zipper 
+    mv <- gets register
+    b <- gets moduleOID
+    liftIO $ putMVar mv (addBaseOid b $ regPair Empty z)
+
+askTree :: (Monad m, MonadIO m, Functor m) => MIBTree m (Tree IValue)
+askTree = fst . top <$> gets zipper
+
+regByDiff :: (Monad m, MonadIO m, Functor m) => Tree IValue -> Tree IValue -> MIBTree m ()
+regByDiff old new = do
+    mv <- gets register
+    b <- gets moduleOID
+    liftIO $ putMVar mv (addBaseOid b $ regPair old new)
+
+
+addBaseOid :: OID -> ([(OID, Maybe Context)], [(OID, Maybe Context)]) -> ([(OID, Maybe Context)], [(OID, Maybe Context)])
+addBaseOid b (reg, unreg) = (map fun reg, map fun unreg)
     where
-    fun (ObjectType o i _ _ c v) = ObjectType (b <> o) i "" "" c v
-    fun _ = error "only objectType can be registered"
+    fun (o, mc) = (b <> o, mc)
 
 toUpdateList :: Zipper Tree IUpdate  -> [MIB]
 toUpdateList (Empty, _) = []
@@ -80,23 +99,6 @@ toUpdateList (t, _) = toUpdateList' ([], t)
               <> toUpdateList' (index x : o, level)
   toUpdateList' _ = []
   valueFromContexted (Contexted (_, _, x)) = x
-
-toRegistrationList :: Zipper Tree IValue  -> [MIB]
-toRegistrationList (Empty, _) = []
-toRegistrationList (t, _)  = toRegistrationList' ([], t)
-  where
-  toRegistrationList' :: (OID, Tree IValue) -> [MIB]
-  toRegistrationList' (o, Node x next level) = 
-      if withValue x
-         then ObjectType (reverse $ index x : o) (index x) "" "" (context x) (valueFromContexted x)
-              : toRegistrationList' (o, next)
-              <> toRegistrationList' (index x : o, level)
-         else toRegistrationList' (o, next)
-              <> toRegistrationList' (index x : o, level)
-  toRegistrationList' _ = []
-  valueFromContexted (Contexted (_, _, Just x)) = x
-  valueFromContexted _ = error "toRegistrationList: Opps, you found bug!!!"
-                                           
 
 inRange :: SearchRange -> MIB -> MIB  
 inRange s m =
@@ -149,16 +151,19 @@ updateSubtree xs z =
         cleanHead (Node v _ l) = Node v Empty l
     in top (cleanHead x, map cleanUnused $ filter isLevel u)
 
-wrap :: (Monad m, MonadIO m, Functor m) => MIBTree m x -> MIBTree m x
-wrap x = do
-    liftIO $ print "wrap"
+-- | wrap MIBTree action, get MIB tree before and after, register added mibs, unregister removed mibs
+regWrapper :: (Monad m, MonadIO m, Functor m) => MIBTree m x -> MIBTree m x
+regWrapper x = do
     old <- fst . top <$> gets zipper  
     r <- x
     new <- fst . top <$> gets zipper  
-    let diff = regPair old new
-    liftIO $ print diff
-    liftIO $ print "unwrap"
+    mv <- gets register
+    b <- gets moduleOID
+    let diff = addBaseOid b $ regPair new old
+    when (diff /= ([], [])) $ do
+        liftIO $ putMVar mv diff
     return r
+
 
 -- | like findOne, but for many paths
 findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [MIB]

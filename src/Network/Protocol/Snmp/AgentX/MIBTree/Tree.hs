@@ -169,7 +169,12 @@ toVList (path, Node a level next)
 toVList (_, Empty) = []
 
 regPair :: Contexted a => Tree a -> Tree a -> (ToRegistrate, ToUnRegistrate)
-regPair old new = splitDiff $ getDiff (sort $ toVList ([], old)) (sort $ toVList ([], new))
+regPair old new = splitDiff $ getDiff (reverseOid $ toVList ([], old)) (reverseOid $ toVList ([], new))
+
+reverseOid :: [(OID, Maybe Context)] -> [(OID, Maybe Context)]
+reverseOid = sort . map fun 
+  where
+    fun (xs, mc) = (reverse xs, mc)
 
 splitDiff :: [Diff a] -> ([a], [a])
 splitDiff = splitDiff' ([], []) 

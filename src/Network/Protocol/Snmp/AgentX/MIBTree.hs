@@ -6,11 +6,13 @@ module Network.Protocol.Snmp.AgentX.MIBTree (
 -- *** create and init Module
 , mkModule
 , initModule
-, initAndRegister
+, registerFullTree
+, unregisterFullTree
+, askTree
+, regByDiff
 -- *** lenses for Module
 , moduleOID
 , register
-, unregister
 , zipper
 , ou
 -- *** functions for work with MIBTree
@@ -38,7 +40,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree (
 , rsValue
 , rdValue
 , rwValue
-, wrap
+, regWrapper
 )
 where
 import Network.Protocol.Snmp.AgentX.MIBTree.MIBTree
