@@ -45,7 +45,7 @@ data SubAgentState = SubAgentState
 type SubAgent = ReaderT SubAgentState IO
 
 
--- | run MIBTree in SubAgent context with lock
+-- | run MIBTree in SubAgent context, with lock (access to Module read-write)
 runMIBTree :: MIBTree IO a -> SubAgent a
 runMIBTree f = do
     st <- mibs <$> ask
@@ -55,7 +55,7 @@ runMIBTree f = do
         atomicWriteIORef st newst
         return a
 
--- | eval MIBTree in SubAgent context without lock
+-- | eval MIBTree in SubAgent context without lock (access to Module read only)
 evalMIBTree :: MIBTree IO a -> SubAgent a
 evalMIBTree f = do
     st <- mibs <$> ask
