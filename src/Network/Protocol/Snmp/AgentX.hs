@@ -13,6 +13,7 @@ module Network.Protocol.Snmp.AgentX
 , UndoError(..)
 , Context
 , agent
+, Client
 )
 where
 

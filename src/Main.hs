@@ -78,5 +78,5 @@ tree = do
     return $ simpleTree m i
     
 main :: IO ()
-main = agent "/var/agentx/master" [1,3,6,1,4,1,44729] =<< tree
+main = agent "/var/agentx/master" [1,3,6,1,4,1,44729] Nothing =<< tree
 

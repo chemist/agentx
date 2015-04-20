@@ -2,7 +2,11 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
 module Network.Protocol.Snmp.AgentX.Service 
-( agent )
+( agent 
+, Client(..) 
+, request
+, requestWithResponse
+)
 where
 
 import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
@@ -36,17 +40,18 @@ import Network.Protocol.Snmp.AgentX.Types
 -- | start agent
 agent :: FilePath  -- ^ path to socket
       -> OID -- ^ base oid
+      -> Maybe Client -- ^ client
       -> [MIB] -- ^ MIBs
       -> IO ()
-agent path o tree = bracket (openSocket path)
-                            close
-                            (runAgent o tree)
+agent path o client tree = bracket (openSocket path)
+                                   close
+                                   (runAgent o tree client)
                               
 openSocket :: String -> IO Socket
 openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path) >> return x
 
-runAgent :: OID -> [MIB] -> Socket -> IO ()
-runAgent modOid tree socket'  = do
+runAgent :: OID -> [MIB] -> Maybe Client -> Socket -> IO ()
+runAgent modOid tree mclient socket' = do
     hSetBuffering stdout LineBuffering
     -- make state
     st <- initAgent modOid tree socket'
@@ -69,9 +74,7 @@ runAgent modOid tree socket'  = do
     serverPid1 <-  fiber st $ req >-> server
     serverPid2 <-  fiber st $ req >-> server
     -- start agent fiber
-    agentPid <- fiber st $ forever $ do
-        resp >-> client ping >-> output
-        liftIO $ threadDelay 5000000
+    agentPid <- fiber st $ resp >-> runClient (maybe def id mclient) >-> output
     regPidTimer <- registerTimer st
     _ <-  getLine :: IO String
     liftIO $ putStrLn "unregister all MIB"
@@ -142,19 +145,39 @@ server' = forever $ await >>= lift . route >>= yieldOnlyJust
 openSession :: Pipe Packet Packet SubAgent ()
 openSession = do
     openPacket <- lift open
-    client openPacket
+    request openPacket
 
 registrator :: Pipe Packet Packet SubAgent () 
-registrator = forever $ mapM_ client =<< lift register
+registrator = forever $ mapM_ request =<< lift register
 
-client :: Packet -> Pipe Packet Packet SubAgent ()
-client p = do
+-- | simple request for client, if you dont need response.
+request :: Packet -> Pipe Packet Packet SubAgent ()
+request p = do
     pid' <- lift getPid
     sid' <- lift getSid
     yield $ DL.set pid pid' (DL.set sid sid' p)
     resp <- await
     lift . setSid . (DL.get sid) $ resp
 
+-- | as request, but you can work with response.
+requestWithResponse :: Packet -> Pipe Packet Packet SubAgent Packet
+requestWithResponse p = do
+    pid' <- lift getPid
+    sid' <- lift getSid
+    yield $ DL.set pid pid' (DL.set sid sid' p)
+    resp <- await
+    lift . setSid . (DL.get sid) $ resp
+    return resp
+
+-- | if you need client
+newtype Client = Client { runClient :: Pipe Packet Packet SubAgent () }
+
+-- | by default just ping every 5s.
+instance Default Client where
+    def = Client . forever $ do
+      request ping
+      liftIO $ threadDelay 5000000
+    
 _dp :: String -> Pipe Packet Packet SubAgent ()
 _dp label = forever $ do
     i <- await
