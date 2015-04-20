@@ -41,6 +41,7 @@ module Network.Protocol.Snmp.AgentX.MIBTree (
 , rdValue
 , rwValue
 , regWrapper
+, mibToVarBind
 )
 where
 import Network.Protocol.Snmp.AgentX.MIBTree.MIBTree
