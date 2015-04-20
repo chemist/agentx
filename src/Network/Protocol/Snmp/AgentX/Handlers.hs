@@ -6,9 +6,9 @@ where
 import Control.Applicative
 import Control.Monad.State
 import Control.Monad.Reader
+import Control.Concurrent.MVar
 import qualified Data.Label as DL
 import qualified Data.Map as Map
-import Data.IORef
 import Data.List (find)
 import Data.Maybe
 
@@ -53,8 +53,8 @@ route packet = route' pdu' >>= return . fmap setPdu
     route' CommitSet = do
         tr <- transactions <$> ask
         now <- uptime
-        mtransaction <- Map.lookup transactionId <$> (liftIO . readIORef $ tr)
-        liftIO $ atomicModifyIORef' tr $ \m ->  (Map.update (\x -> Just $ x { statusV = CleanupSetT }) transactionId m, ())
+        mtransaction <- Map.lookup transactionId <$> (liftIO . readMVar $ tr)
+        liftIO $ modifyMVar_ tr $ return . Map.update (\x -> Just $ x { statusV = CleanupSetT }) transactionId
         case mtransaction of
              Just (Transaction mcontext varBindList TestSetT) -> do
                  result <- mapM (commit mcontext) varBindList
@@ -64,16 +64,16 @@ route packet = route' pdu' >>= return . fmap setPdu
              _ -> return . Just $ Response now (Tagged CommitFailed) minBound []
         where
           commit mcontext varbind' = do
-              mib <- runMIBTree (findOne (DL.get vboid varbind') mcontext) 
+              mib <- bridgeToBase (findOne (DL.get vboid varbind') mcontext) 
               result <- liftIO $ commitSetAIO (val mib) (DL.get vbvalue varbind')
               return (varbind', result)
     route' CleanupSet = do
         tr <- transactions <$> ask
-        maybeTransaction <-  Map.lookup transactionId <$> (liftIO . readIORef $ tr)
+        maybeTransaction <-  Map.lookup transactionId <$> (liftIO . readMVar $ tr)
         let oidsList = map (DL.get vboid) $ fromMaybe [] (vblist `fmap` maybeTransaction)
         let mcontext = join $ tcontext `fmap` maybeTransaction
-        liftIO . atomicModifyIORef' tr $  \m -> (Map.delete transactionId m, ())
-        void $ runMIBTree (regWrapper (findMany oidsList mcontext))
+        liftIO . modifyMVar_ tr $ return . Map.delete transactionId
+        void $ bridgeToBase (regWrapper (findMany oidsList mcontext))
         return Nothing
     
     route' _ = do
@@ -83,13 +83,13 @@ route packet = route' pdu' >>= return . fmap setPdu
 uptime :: SubAgent SysUptime
 uptime = do
     nowref <- sysuptime <$> ask
-    liftIO . readIORef $ nowref
+    liftIO . readMVar $ nowref
 
 getHandler :: [OID] -> Maybe Context -> SubAgent [Either TaggedError VarBind]
-getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< evalMIBTree (findMany xs mc))
+getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findMany xs mc))
 
 getNextHandler :: Maybe Context -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
-getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< evalMIBTree (findManyNext xs mc))
+getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< bridgeToBase (findManyNext xs mc))
 
 getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
 getBulkHandler = undefined
@@ -99,14 +99,19 @@ testSetHandler mcontext varBindList transactionId = do
     tr <- transactions <$> ask
     result <- mapM testFun varBindList
     let (goods, _, _) = splitByError result
-    liftIO . atomicModifyIORef' tr $ \x -> (Map.insert transactionId (Transaction mcontext goods TestSetT) x, ())
+    liftIO . modifyMVar_ tr $ return . Map.insert transactionId (Transaction mcontext goods TestSetT)
     return result
     where
       testFun v = do
-          mib <- runMIBTree (findOne (DL.get vboid v) mcontext) 
+          mib <- bridgeToBase (findOne (DL.get vboid v) mcontext) 
           testResult <- liftIO $ testSetAIO (val mib) (DL.get vbvalue v)
           return $ if testResult == NoTestError
                       then Right v
                       else Left (Tagged testResult)
 
+-- | convert MIB to VarBind
+mibToVarBind :: (Monad m, MonadIO m, Functor m) => MIB -> m VarBind
+mibToVarBind m = do
+    v <- liftIO $ readAIO (val m) 
+    return $ mkVarBind (oi m) v
 

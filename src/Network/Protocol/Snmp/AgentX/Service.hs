@@ -14,7 +14,6 @@ import Control.Applicative hiding (empty)
 import Control.Monad.State.Strict
 import Control.Monad.Reader
 import Control.Exception
-import Data.IORef
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
@@ -22,6 +21,7 @@ import Pipes.Concurrent (spawn, forkIO, fromInput, toOutput, unbounded)
 import Pipes
 import Pipes.Lift
 import Control.Concurrent.MVar
+import Data.Maybe
 import Data.Default
 import qualified Data.Map.Strict as Map 
 import qualified Data.Label as DL
@@ -51,10 +51,7 @@ runAgent modOid tree socket'  = do
     -- make state
     st <- initAgent modOid tree socket'
     -- start timer
-    timer <- forkIO $ do
-        t <- getSysUptime
-        atomicWriteIORef (sysuptime st) t 
-        threadDelay 1000000
+    timer <- forkIO $ modifyMVar_ (sysuptime st) (const $ getSysUptime) >> threadDelay 1000000
     -- spawn mailboxes for requests and for responses
     (reqTo, req) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
     (respTo, resp) <- (\(x,y) -> (toOutput x, fromInput y)) <$> spawn unbounded
@@ -66,8 +63,6 @@ runAgent modOid tree socket'  = do
     regPid <- fiber st $ resp >-> registrator >->  output
     -- start server fiber
     serverPid <-  fiber st $ req >-> server
-    serverPid1 <-  fiber st $ req >-> server
-    serverPid2 <-  fiber st $ req >-> server
     -- start agent fiber
     agentPid <- fiber st $ forever $ do
         resp >-> client ping >-> output
@@ -75,26 +70,25 @@ runAgent modOid tree socket'  = do
     regPidTimer <- registerTimer st
     _ <-  getLine :: IO String
     liftIO $ putStrLn "unregister all MIB"
-    evalStateT unregisterFullTree =<< readIORef (mibs st)
+    evalStateT unregisterFullTree =<< readMVar (mibs st)
     liftIO $ threadDelay 1000000
-    void $ mapM (liftIO . killThread) [serverPid, serverPid1, serverPid2, sortPid, agentPid, regPid, timer, regPidTimer] -- p2,p3,p4,p5, 
+    void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, timer, regPidTimer] -- p2,p3,p4,p5, 
 
 initAgent :: OID -> [MIB] -> Socket -> IO SubAgentState
 initAgent modOid tree socket' = do
-    sysUptimeIORef <- newIORef =<< getSysUptime
-    sessionsIORef <- newIORef Nothing
-    packetCounterIORef <- newIORef minBound
+    sysUptimeMVar <- newMVar =<< getSysUptime
+    sessionsMVar <- newEmptyMVar
+    packetCounterMVar <- newMVar minBound
     mod' <- mkModule modOid tree 
-    moduleIORef <- newIORef =<< flip execStateT mod' (initModule >> registerFullTree) 
-    m <- newMVar ()
-    transactionsIORef <- newIORef Map.empty
-    return $ SubAgentState sysUptimeIORef packetCounterIORef moduleIORef m socket' sessionsIORef transactionsIORef
+    moduleMVar <- newMVar =<< flip execStateT mod' (initModule >> registerFullTree) 
+    transactionsMVar <- newMVar Map.empty
+    return $ SubAgentState sysUptimeMVar packetCounterMVar moduleMVar socket' sessionsMVar transactionsMVar
 
 registerTimer :: SubAgentState -> IO ThreadId
 registerTimer st = forkIO . forever $ do
-    oldTree <- evalStateT askTree =<< readIORef (mibs st)
+    oldTree <- evalStateT askTree =<< readMVar (mibs st)
     liftIO $ threadDelay 1000000
-    evalStateT (flip regByDiff oldTree =<< askTree) =<< readIORef (mibs st)
+    evalStateT (flip regByDiff oldTree =<< askTree) =<< readMVar (mibs st)
 ---------------------------------------------------------------------------
 -- Pipes eval 
 ---------------------------------------------------------------------------
@@ -153,7 +147,9 @@ client p = do
     sid' <- lift getSid
     yield $ DL.set pid pid' (DL.set sid sid' p)
     resp <- await
-    lift . setSid . (DL.get sid) $ resp
+    sessionsRef <- sessions <$> ask
+    sid'' <- liftIO $ tryReadMVar sessionsRef
+    maybe (lift . setSid . (DL.get sid) $ resp) (const $ return ()) sid''
 
 _dp :: String -> Pipe Packet Packet SubAgent ()
 _dp label = forever $ do
@@ -167,7 +163,7 @@ _dp label = forever $ do
 register :: SubAgent [Packet]
 register = do
     s <- mibs <$> ask
-    m  <- liftIO $ readIORef s
+    m  <- liftIO $ readMVar s
     (toReg, toUnReg) <- liftIO $ takeMVar (DL.get MIBTree.register m)
     liftIO $ mapM_ (\x -> print ("R " ++ show x)) toReg
     liftIO $ mapM_ (\x -> print ("UR " ++ show x)) toUnReg
@@ -185,7 +181,7 @@ register = do
 open :: SubAgent Packet
 open = do
     s <- mibs <$> ask
-    m <- liftIO $ readIORef s
+    m <- liftIO $ readMVar s
     let open' = Open minBound (DL.get moduleOID m) ("Haskell AgentX sub-aagent")
     return $ mkPacket def open' def minBound minBound minBound 
 
@@ -195,30 +191,20 @@ ping = mkPacket def (Ping Nothing) def minBound minBound minBound
 getSid :: SubAgent SessionID
 getSid = do
     sesRef <- sessions <$> ask
-    s <- liftIO $ readIORef sesRef
-    maybe (return minBound) return s
+    s <- liftIO $ tryReadMVar sesRef
+    return $ fromMaybe minBound s
 
 setSid :: SessionID -> SubAgent ()
 setSid sid' = do
     sesRef <- sessions <$> ask
-    s <- liftIO $ readIORef sesRef
-    case s of
-         Nothing -> do
-             liftIO $ atomicModifyIORef' sesRef (const $ (Just sid', ()))
-             msg
-         Just x 
-           | x == sid' -> return ()
-           | otherwise -> do
-               liftIO $ atomicModifyIORef' sesRef (const $ (Just sid', ()))
-               msg
-    where
-    msg = liftIO $ print $ "set sid " ++ show sid'
+    liftIO $ putMVar sesRef sid'
+    liftIO $ print $ "set sid " ++ show sid'
     
 
 getPid :: SubAgent PacketID
 getPid = do
     pidRef <- packetCounter <$> ask
-    liftIO $ atomicModifyIORef' pidRef $ \x -> (succ x, succ x)
+    liftIO $ modifyMVar pidRef $ \x -> return (succ x, succ x)
 
 getSysUptime :: IO SysUptime
 getSysUptime = do

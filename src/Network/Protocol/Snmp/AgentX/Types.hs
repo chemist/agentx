@@ -1,8 +1,7 @@
 module Network.Protocol.Snmp.AgentX.Types 
 ( SubAgentState(..)
 , Transaction(..)
-, evalMIBTree
-, runMIBTree
+, bridgeToBase
 , SubAgent
 , TransactionState(..)
 )
@@ -13,7 +12,7 @@ import Control.Monad.Reader
 import Network.Socket hiding (recv)
 import Control.Concurrent.MVar
 import Control.Applicative
-import Data.IORef
+import Data.Tuple (swap)
 import Data.Map
 
 import Network.Protocol.Snmp.AgentX.Packet 
@@ -33,30 +32,20 @@ data TransactionState = TestSetT
                       deriving (Show, Eq, Ord, Enum)
 
 data SubAgentState = SubAgentState
-  { sysuptime :: IORef SysUptime
-  , packetCounter :: IORef PacketID
-  , mibs :: IORef Module 
-  , mutex :: MVar ()
+  { sysuptime :: MVar SysUptime
+  , packetCounter :: MVar PacketID
+  , mibs :: MVar Module 
   , sock :: Socket
-  , sessions :: IORef (Maybe SessionID)
-  , transactions :: IORef (Map TransactionID Transaction)
+  , sessions :: MVar SessionID
+  , transactions :: MVar (Map TransactionID Transaction)
   }
 
 type SubAgent = ReaderT SubAgentState IO
 
 
--- | run MIBTree in SubAgent context with lock
-runMIBTree :: MIBTree IO a -> SubAgent a
-runMIBTree f = do
+-- | run MIBTree in SubAgent context
+bridgeToBase :: MIBTree IO a -> SubAgent a
+bridgeToBase f = do
     st <- mibs <$> ask
-    m <- mutex <$> ask
-    lift $ withMVar m $ \() -> do
-        (a, newst) <- runStateT f =<< (liftIO $ readIORef st)
-        atomicWriteIORef st newst
-        return a
+    lift $ modifyMVar st $ \x -> swap <$> runStateT f x
 
--- | eval MIBTree in SubAgent context without lock
-evalMIBTree :: MIBTree IO a -> SubAgent a
-evalMIBTree f = do
-    st <- mibs <$> ask
-    liftIO $ evalStateT f =<< (liftIO $ readIORef st)

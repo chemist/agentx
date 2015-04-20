@@ -13,7 +13,6 @@ module Network.Protocol.Snmp.AgentX.MIBTree.Types
 , MIB(..)
 , mkObject
 , mkObjectType
-, mibToVarBind
 , isObjectType
 , Parent
 , Name
@@ -38,7 +37,7 @@ import Data.Label
 
 import Network.Protocol.Snmp.AgentX.MIBTree.Tree 
 import Network.Protocol.Snmp (Value(..), OID)
-import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError, VarBind, mkVarBind)
+import Network.Protocol.Snmp.AgentX.Packet (Context, CommitError, TestError, UndoError)
 
 -- | Wrapper for value
 data PVal = Read 
@@ -129,22 +128,15 @@ buildTree ms = foldMap singleton $ fillOid ms
   where
     singleton :: MIB -> (Tree IValue , Tree IUpdate)
     singleton m = singleton' (oi m, m)
-
-    singleton' :: (OID, MIB) -> (Tree IValue, Tree IUpdate)
-    singleton' ([],  _) = (Empty, Empty)
-    singleton' ([_], Object _ i _ _ Nothing) = (Node (zero i) Empty Empty, Empty )
-    singleton' ([_], Object _ i _ _ u@_) = (Node (zero i) Empty Empty, Node (toC i Nothing u) Empty Empty )
-    singleton' ([_], ObjectType _ i _ _ c v) = (Node (toC i c (Just v)) Empty Empty, Empty)
-    singleton' ((i:xs), obj@(Object _ _ _ _ Nothing)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
-    singleton' ((i:xs), obj@(Object _ _ _ _ _)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Node (zero i) Empty (snd $ singleton' (xs, obj)))
-    singleton' ((i:xs), obj@(ObjectType{})) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
-
-    toC :: Integer -> Maybe Context -> Maybe a -> ContextedValue a
-    toC i mc mv = Contexted (i, mc, mv)
-
-    zero :: Integer -> ContextedValue a
-    zero i = Contexted (i, Nothing, Nothing)
-
+      where
+        singleton' :: (OID, MIB) -> (Tree IValue, Tree IUpdate)
+        singleton' ([],  _) = (Empty, Empty)
+        singleton' ([_], Object _ i _ _ Nothing) = (Node (zero i) Empty Empty, Empty )
+        singleton' ([_], Object _ i _ _ u@_) = (Node (zero i) Empty Empty, Node (toC i Nothing u) Empty Empty )
+        singleton' ([_], ObjectType _ i _ _ c v) = (Node (toC i c (Just v)) Empty Empty, Empty)
+        singleton' ((i:xs), obj@(Object _ _ _ _ Nothing)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
+        singleton' ((i:xs), obj@(Object _ _ _ _ _)) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Node (zero i) Empty (snd $ singleton' (xs, obj)))
+        singleton' ((i:xs), obj@(ObjectType{})) = (Node (zero i) Empty (fst $ singleton' (xs, obj)), Empty)
 
 -- | check MIB subtype
 isObjectType :: MIB -> Bool
@@ -214,9 +206,10 @@ isWritable :: PVal -> Bool
 isWritable ReadWrite{} = True
 isWritable _ = False
 
--- | convert MIB to VarBind
-mibToVarBind :: (Monad m, MonadIO m, Functor m) => MIB -> m VarBind
-mibToVarBind m = do
-    v <- liftIO $ readAIO (val m) 
-    return $ mkVarBind (oi m) v
+toC :: Integer -> Maybe Context -> Maybe a -> ContextedValue a
+toC i mc mv = Contexted (i, mc, mv)
+
+zero :: Integer -> ContextedValue a
+zero i = Contexted (i, Nothing, Nothing)
+
 
