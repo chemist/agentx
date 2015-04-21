@@ -3,6 +3,7 @@
 {-# LANGUAGE BangPatterns #-}
 module Network.Protocol.Snmp.AgentX.Service 
 ( agent 
+, runAgent
 , Client(..) 
 , request
 , requestWithResponse
@@ -11,7 +12,7 @@ where
 
 import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
 import Network.Socket.ByteString.Lazy (recv, send)
-import Control.Concurrent (killThread, threadDelay, ThreadId)
+import Control.Concurrent (killThread, threadDelay, ThreadId, myThreadId)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
 import Control.Applicative hiding (empty)
@@ -29,6 +30,8 @@ import Control.Concurrent.MVar
 import Data.Default
 import qualified Data.Map.Strict as Map 
 import qualified Data.Label as DL
+import System.Exit
+import System.Posix.Signals
 
 import Network.Protocol.Snmp (OID)
 import Network.Protocol.Snmp.AgentX.Packet 
@@ -50,6 +53,9 @@ agent path o client tree = bracket (openSocket path)
 openSocket :: String -> IO Socket
 openSocket path = socket AF_UNIX Stream 0 >>= \x -> connect x (SockAddrUnix path) >> return x
 
+-- | start agent with socket
+-- exit when catch sigQUIT, sigTERM, keyboardSignal
+-- show MIB tree when catch sigUSR1
 runAgent :: OID -> [MIB] -> Maybe Client -> Socket -> IO ()
 runAgent modOid tree mclient socket' = do
     hSetBuffering stdout LineBuffering
@@ -69,18 +75,25 @@ runAgent modOid tree mclient socket' = do
     run st $ resp >-> openSession >-> output
     -- start register, unregister fiber
     regPid <- fiber st $ resp >-> registrator >->  output
-    -- start server fiber
+    -- start server fibers
     serverPid <-  fiber st $ req >-> server
     serverPid1 <-  fiber st $ req >-> server
     serverPid2 <-  fiber st $ req >-> server
     -- start agent fiber
     agentPid <- fiber st $ resp >-> runClient (maybe def id mclient) >-> output
     regPidTimer <- registerTimer st
-    _ <-  getLine :: IO String
-    liftIO $ putStrLn "unregister all MIB"
-    evalStateT unregisterFullTree =<< readIORef (mibs st)
-    liftIO $ threadDelay 1000000
-    void $ mapM (liftIO . killThread) [serverPid, serverPid1, serverPid2, sortPid, agentPid, regPid, timer, regPidTimer] -- p2,p3,p4,p5, 
+    mainPid <- myThreadId
+    let stopAgent = do
+            liftIO $ putStrLn "unregister all MIB"
+            evalStateT unregisterFullTree =<< readIORef (mibs st)
+            liftIO $ threadDelay 1000000
+            void $ mapM (liftIO . killThread) [serverPid, serverPid1, serverPid2, sortPid, agentPid, regPid, timer, regPidTimer] 
+            throwTo mainPid ExitSuccess
+    void $ installHandler keyboardSignal (Catch stopAgent) Nothing
+    void $ installHandler sigTERM (Catch stopAgent) Nothing
+    void $ installHandler sigQUIT (Catch stopAgent) Nothing
+    void $ installHandler sigUSR1 (Catch (print =<< readIORef (mibs st))) Nothing
+    forever $ threadDelay 10000000
 
 initAgent :: OID -> [MIB] -> Socket -> IO SubAgentState
 initAgent modOid tree socket' = do
@@ -192,8 +205,8 @@ register = do
     s <- mibs <$> ask
     m  <- liftIO $ readIORef s
     (toReg, toUnReg) <- liftIO $ takeMVar (DL.get MIBTree.register m)
-    liftIO $ mapM_ (\x -> print ("R " ++ show x)) toReg
-    liftIO $ mapM_ (\x -> print ("UR " ++ show x)) toUnReg
+--    liftIO $ mapM_ (\x -> print ("R " ++ show x)) toReg
+--    liftIO $ mapM_ (\x -> print ("UR " ++ show x)) toUnReg
     return $ map toRegPacket toReg <> map toUnRegPacket toUnReg
         where
         toRegPacket :: (OID, Maybe Context) -> Packet
@@ -226,16 +239,10 @@ setSid sid' = do
     sesRef <- sessions <$> ask
     s <- liftIO $ readIORef sesRef
     case s of
-         Nothing -> do
-             liftIO $ atomicModifyIORef' sesRef (const $ (Just sid', ()))
-             msg
+         Nothing -> liftIO $ atomicModifyIORef' sesRef (const $ (Just sid', ()))
          Just x 
            | x == sid' -> return ()
-           | otherwise -> do
-               liftIO $ atomicModifyIORef' sesRef (const $ (Just sid', ()))
-               msg
-    where
-    msg = liftIO $ print $ "set sid " ++ show sid'
+           | otherwise -> liftIO $ atomicModifyIORef' sesRef (const $ (Just sid', ()))
     
 
 getPid :: SubAgent PacketID

@@ -15,6 +15,7 @@ module Network.Protocol.Snmp.AgentX (
 , UndoError(..)
 , Context
 , agent
+, runAgent
 , Client
 -- * Usage
 -- ** Imports
@@ -163,18 +164,12 @@ Library for write extensible SNMP agents.
 > > defPrivType DES
 > > defContext ""
 > 
-> Build and start example
-> > cabal install example
-> > .cabal-sandbox/bin/example
-> > .cabal-sandbox/bin/agentx
-> > "set sid SessionID 15"
-> > "R ([1,3,6,1,4,1,44729,1,1,0,1],Nothing)"
-> > "R ([1,3,6,1,4,1,44729,1,1,0,0],Nothing)"
-> > "R ([1,3,6,1,4,1,44729,1,0],Nothing)"
-> > "R ([1,3,6,1,4,1,44729,0,2],Nothing)"
-> > "R ([1,3,6,1,4,1,44729,0,1],Just (Context \"version\"))"
-> > "R ([1,3,6,1,4,1,44729,0,1],Nothing)"
-> > "R ([1,3,6,1,4,1,44729,0,0],Nothing)"
+> Build example
+> > cabal install -f example
+> Start SNMP server
+> > sudo snmpd
+> Start SNMP agent
+> > .cabal-sandbox/bin/agentx_example
 > 
 > Get MIB tree
 >  > snmpwalk -r 1 -On localhost 1.3.6.1.4.1.44729
