@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Network.Protocol.Snmp.AgentX.Handlers 
 ( route )
 where
@@ -6,6 +7,7 @@ where
 import Control.Applicative
 import Control.Monad.State
 import Control.Monad.Reader
+import Control.Exception (RecSelError, handle)
 import qualified Data.Label as DL
 import qualified Data.Map as Map
 import Data.IORef
@@ -104,7 +106,7 @@ testSetHandler mcontext varBindList transactionId = do
     where
       testFun v = do
           mib <- runMIBTree (findOne (DL.get vboid v) mcontext) 
-          testResult <- liftIO $ testSetAIO (val mib) (DL.get vbvalue v)
+          testResult <- liftIO $ handle (\(_ :: RecSelError) -> return NotWritable) $ testSetAIO (val mib) (DL.get vbvalue v)
           return $ if testResult == NoTestError
                       then Right v
                       else Left (Tagged testResult)
