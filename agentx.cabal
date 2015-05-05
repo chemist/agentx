@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                agentx
-version:             0.1.0.4
+version:             0.1.0.5
 synopsis:            AgentX protocol for write SNMP subagents
 description:         Native implementation agentx protocol (rfc2741)       
 license:             BSD3

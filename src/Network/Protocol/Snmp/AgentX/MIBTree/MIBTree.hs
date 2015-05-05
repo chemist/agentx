@@ -33,10 +33,10 @@ import Prelude hiding ((.))
 -- import Debug.Trace
 
 -- | build tree and init module
-initModule :: (Monad m, MonadIO m, Functor m) =>  MIBTree m ()
+initModule :: MIBTree IO ()
 initModule = flip forM_ evalTree =<< toUpdateList  <$> gets ou  
     where
-    evalTree :: (Monad m, MonadIO m, Functor m) => MIB -> MIBTree m ()
+    evalTree :: MIB -> MIBTree IO ()
     evalTree obj = do
         (mibs, updates) <- buildTree <$> (lift $ unUpdate . fromJust . update $ obj)
         case updates of
@@ -107,10 +107,10 @@ inRange s m =
         else ObjectType (L.get startOID s) (last $ L.get startOID s) "" "" Nothing (rsValue EndOfMibView)
 
 -- | find one MIB 
-findOne :: (Monad m, MonadIO m, Functor m) => 
+findOne :: 
       OID  -- ^ path for find
     -> Maybe Context -- ^ context, you can have many values with one path and different context
-    -> MIBTree m MIB 
+    -> MIBTree IO MIB 
 findOne ys mcontext = do
     -- init zippers
     modify zipper top
@@ -166,14 +166,14 @@ regWrapper x = do
 
 
 -- | like findOne, but for many paths
-findMany :: (Monad m, MonadIO m, Functor m) => [OID] -> Maybe Context -> MIBTree m [MIB]
+findMany :: [OID] -> Maybe Context -> MIBTree IO [MIB]
 findMany xs mc = mapM (flip findOne mc) xs
 
 -- | find next node in MIBTree 
-findNext :: (Monad m, MonadIO m, Functor m) => 
+findNext :: 
       SearchRange  -- ^ SearchRange (getwalk or getnext requests)
     -> Maybe Context -- ^ context
-    -> MIBTree m MIB -- ^ search result
+    -> MIBTree IO MIB -- ^ search result
 findNext sr mcontext = do
     modify zipper top
     modify ou top
@@ -245,7 +245,7 @@ getFocus z@(Node (Contexted (i, mc, Just v)) _ _, _) =
 getFocus _ = error "getFocus"
 
 -- | like findNext
-findManyNext :: (Monad m, MonadIO m, Functor m) => [SearchRange] -> Maybe Context -> MIBTree m [MIB]
+findManyNext :: [SearchRange] -> Maybe Context -> MIBTree IO [MIB]
 findManyNext xs mc = mapM (flip findNext mc) xs
 
 

@@ -77,8 +77,6 @@ runAgent modOid tree mclient socket' = do
     regPid <- fiber st $ resp >-> registrator >->  output
     -- start server fibers
     serverPid <-  fiber st $ req >-> server
-    serverPid1 <-  fiber st $ req >-> server
-    serverPid2 <-  fiber st $ req >-> server
     -- start agent fiber
     agentPid <- fiber st $ resp >-> runClient (maybe def id mclient) >-> output
     regPidTimer <- registerTimer st
@@ -87,7 +85,7 @@ runAgent modOid tree mclient socket' = do
             liftIO $ putStrLn "unregister all MIB"
             evalStateT unregisterFullTree =<< readTVarIO (mibs st)
             liftIO $ threadDelay 1000000
-            void $ mapM (liftIO . killThread) [serverPid, serverPid1, serverPid2, sortPid, agentPid, regPid, timer, regPidTimer] 
+            void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, timer, regPidTimer] 
             throwTo mainPid ExitSuccess
     void $ installHandler keyboardSignal (Catch stopAgent) Nothing
     void $ installHandler sigTERM (Catch stopAgent) Nothing
@@ -119,7 +117,6 @@ run s eff = runEffect $ runReaderP s eff
 server :: Consumer Packet SubAgent ()
 server = forever $ do
     m <- await
-    -- ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
     ask >>= flip fiber (yield m >-> server' >-> output)
 
 fiber :: MonadIO m => SubAgentState -> Effect SubAgent () -> m ThreadId

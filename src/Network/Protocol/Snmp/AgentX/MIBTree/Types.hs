@@ -52,7 +52,7 @@ data PVal = Read
             }
 
 -- | Update, for rebuild oid tree in runtime
-newtype Update = Update { unUpdate :: forall  m . (Monad m, MonadIO m, Functor m) =>  m [MIB] }
+newtype Update = Update { unUpdate :: IO [MIB] }
 
 type IValue = ContextedValue PVal  
 type IUpdate = ContextedValue Update 
@@ -122,10 +122,10 @@ instance Show Module where
 type MIBTree = StateT Module  
 
 -- | Constructor for Module
-mkModule :: (Monad m, MonadIO m, Functor m) => 
+mkModule ::  
     OID -- ^ base module OID
   -> [MIB] -- ^ all MIB for create module
-  -> m Module 
+  -> IO Module 
 mkModule moduleOid mibs = do
     reg <- liftIO $ newEmptyMVar
     return $ Module (toZipper . fst . buildTree $ mibs) (toZipper . snd . buildTree $ mibs) moduleOid reg
@@ -221,8 +221,8 @@ isWritable ReadWrite{} = True
 isWritable _ = False
 
 -- | convert MIB to VarBind
-mibToVarBind :: (Monad m, MonadIO m, Functor m) => MIB -> m VarBind
+mibToVarBind :: MIB -> IO VarBind
 mibToVarBind m = do
-    v <- liftIO $ readAIO (val m) 
+    v <- readAIO (val m) 
     return $ mkVarBind (oi m) v
 

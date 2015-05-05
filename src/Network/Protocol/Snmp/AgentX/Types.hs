@@ -43,14 +43,15 @@ data SubAgentState = SubAgentState
 type SubAgent = ReaderT SubAgentState IO
 
 
--- | run MIBTree in SubAgent context, with lock (access to Module read-write)
+-- | run MIBTree in SubAgent context, without lock, if trees was changed, retry
 runMIBTree :: MIBTree IO a -> SubAgent a
 runMIBTree f = do
     st <- mibs <$> ask
     oldst <- liftIO $ readTVarIO st
     (a, newst) <- liftIO $ runStateT f oldst
     result <- lift . atomically $ do
-        if oldst == newst 
+        oldst' <- readTVar st
+        if oldst' == newst 
            then writeTVar st newst >> return True
            else return False
     if result
