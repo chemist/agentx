@@ -1,7 +1,6 @@
 module Network.Protocol.Snmp.AgentX.Types 
 ( SubAgentState(..)
 , Transaction(..)
-, evalMIBTree
 , runMIBTree
 , SubAgent
 , TransactionState(..)
@@ -11,9 +10,9 @@ where
 import Control.Monad.State.Strict
 import Control.Monad.Reader
 import Network.Socket hiding (recv)
-import Control.Concurrent.MVar
 import Control.Applicative
 import Data.IORef
+import GHC.Conc
 import Data.Map
 
 import Network.Protocol.Snmp.AgentX.Packet 
@@ -35,8 +34,7 @@ data TransactionState = TestSetT
 data SubAgentState = SubAgentState
   { sysuptime :: IORef SysUptime
   , packetCounter :: IORef PacketID
-  , mibs :: IORef Module 
-  , mutex :: MVar ()
+  , mibs :: TVar Module 
   , sock :: Socket
   , sessions :: IORef (Maybe SessionID)
   , transactions :: IORef (Map TransactionID Transaction)
@@ -49,14 +47,13 @@ type SubAgent = ReaderT SubAgentState IO
 runMIBTree :: MIBTree IO a -> SubAgent a
 runMIBTree f = do
     st <- mibs <$> ask
-    m <- mutex <$> ask
-    lift $ withMVar m $ \() -> do
-        (a, newst) <- runStateT f =<< (liftIO $ readIORef st)
-        atomicWriteIORef st newst
-        return a
+    oldst <- liftIO $ readTVarIO st
+    (a, newst) <- liftIO $ runStateT f oldst
+    result <- lift . atomically $ do
+        if oldst == newst 
+           then writeTVar st newst >> return True
+           else return False
+    if result
+       then return a
+       else runMIBTree f
 
--- | eval MIBTree in SubAgent context without lock (access to Module read only)
-evalMIBTree :: MIBTree IO a -> SubAgent a
-evalMIBTree f = do
-    st <- mibs <$> ask
-    liftIO $ evalStateT f =<< (liftIO $ readIORef st)

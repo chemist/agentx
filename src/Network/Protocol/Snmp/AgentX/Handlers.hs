@@ -88,10 +88,10 @@ uptime = do
     liftIO . readIORef $ nowref
 
 getHandler :: [OID] -> Maybe Context -> SubAgent [Either TaggedError VarBind]
-getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< evalMIBTree (findMany xs mc))
+getHandler xs mc = map Right <$> (liftIO . mapM mibToVarBind =<< runMIBTree (findMany xs mc))
 
 getNextHandler :: Maybe Context -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
-getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< evalMIBTree (findManyNext xs mc))
+getNextHandler mc xs = map Right <$> (liftIO . mapM mibToVarBind =<< runMIBTree (findManyNext xs mc))
 
 getBulkHandler :: Maybe Context -> NonRepeaters -> MaxRepeaters -> [SearchRange] -> SubAgent [Either TaggedError VarBind]
 getBulkHandler = undefined

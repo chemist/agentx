@@ -109,6 +109,12 @@ data Module = Module
 
 mkLabel ''Module
 
+instance Eq (ContextedValue a) where
+    _ == _ = True
+
+instance Eq Module where
+    (Module z o _ _) == (Module z1 o1 _ _) = (z == z1) && (o == o1)
+
 instance Show Module where
     show (Module z ou' _ _) = show z ++ "\n" ++ show ou'
 
