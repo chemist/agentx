@@ -24,6 +24,7 @@ import Prelude
 
 data Move b a = Next (b a)
               | Level (b a)
+              deriving Eq
 
 instance (Show a, Show (b a)) => Show (Move b a) where
     show (Next x) = "\nNext " ++ show x

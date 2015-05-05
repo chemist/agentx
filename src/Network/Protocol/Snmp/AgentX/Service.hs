@@ -12,7 +12,6 @@ where
 
 import Network.Socket (close, Socket, socket, Family(AF_UNIX), SocketType(Stream), connect, SockAddr(SockAddrUnix))
 import Network.Socket.ByteString.Lazy (recv, send)
-import Control.Concurrent (killThread, threadDelay, ThreadId, myThreadId)
 import Data.Binary (encode, decode)
 import Data.Monoid ((<>))
 import Control.Applicative hiding (empty)
@@ -23,10 +22,11 @@ import Data.IORef
 import Data.Fixed (div')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
-import Pipes.Concurrent (spawn, forkIO, fromInput, toOutput, unbounded)
+import Pipes.Concurrent (spawn, fromInput, toOutput, unbounded)
 import Pipes
 import Pipes.Lift
-import Control.Concurrent.MVar
+import GHC.Conc hiding (yield)
+import Control.Concurrent.MVar (takeMVar)
 import Data.Default
 import qualified Data.Map.Strict as Map 
 import qualified Data.Label as DL
@@ -77,22 +77,20 @@ runAgent modOid tree mclient socket' = do
     regPid <- fiber st $ resp >-> registrator >->  output
     -- start server fibers
     serverPid <-  fiber st $ req >-> server
-    serverPid1 <-  fiber st $ req >-> server
-    serverPid2 <-  fiber st $ req >-> server
     -- start agent fiber
     agentPid <- fiber st $ resp >-> runClient (maybe def id mclient) >-> output
     regPidTimer <- registerTimer st
     mainPid <- myThreadId
     let stopAgent = do
             liftIO $ putStrLn "unregister all MIB"
-            evalStateT unregisterFullTree =<< readIORef (mibs st)
+            evalStateT unregisterFullTree =<< readTVarIO (mibs st)
             liftIO $ threadDelay 1000000
-            void $ mapM (liftIO . killThread) [serverPid, serverPid1, serverPid2, sortPid, agentPid, regPid, timer, regPidTimer] 
+            void $ mapM (liftIO . killThread) [serverPid, sortPid, agentPid, regPid, timer, regPidTimer] 
             throwTo mainPid ExitSuccess
     void $ installHandler keyboardSignal (Catch stopAgent) Nothing
     void $ installHandler sigTERM (Catch stopAgent) Nothing
     void $ installHandler sigQUIT (Catch stopAgent) Nothing
-    void $ installHandler sigUSR1 (Catch (print =<< readIORef (mibs st))) Nothing
+    void $ installHandler sigUSR1 (Catch (print =<< readTVarIO (mibs st))) Nothing
     forever $ threadDelay 10000000
 
 initAgent :: OID -> [MIB] -> Socket -> IO SubAgentState
@@ -101,16 +99,15 @@ initAgent modOid tree socket' = do
     sessionsIORef <- newIORef Nothing
     packetCounterIORef <- newIORef minBound
     mod' <- mkModule modOid tree 
-    moduleIORef <- newIORef =<< flip execStateT mod' (initModule >> registerFullTree) 
-    m <- newMVar ()
+    moduleIORef <- newTVarIO =<< flip execStateT mod' (initModule >> registerFullTree) 
     transactionsIORef <- newIORef Map.empty
-    return $ SubAgentState sysUptimeIORef packetCounterIORef moduleIORef m socket' sessionsIORef transactionsIORef
+    return $ SubAgentState sysUptimeIORef packetCounterIORef moduleIORef socket' sessionsIORef transactionsIORef
 
 registerTimer :: SubAgentState -> IO ThreadId
 registerTimer st = forkIO . forever $ do
-    oldTree <- evalStateT askTree =<< readIORef (mibs st)
+    oldTree <- evalStateT askTree =<< readTVarIO (mibs st)
     liftIO $ threadDelay 1000000
-    evalStateT (flip regByDiff oldTree =<< askTree) =<< readIORef (mibs st)
+    evalStateT (flip regByDiff oldTree =<< askTree) =<< readTVarIO (mibs st)
 ---------------------------------------------------------------------------
 -- Pipes eval 
 ---------------------------------------------------------------------------
@@ -120,7 +117,6 @@ run s eff = runEffect $ runReaderP s eff
 server :: Consumer Packet SubAgent ()
 server = forever $ do
     m <- await
-    -- ask >>= flip fiber (yield m >-> server' >-> _dp "out" >-> output)
     ask >>= flip fiber (yield m >-> server' >-> output)
 
 fiber :: MonadIO m => SubAgentState -> Effect SubAgent () -> m ThreadId
@@ -203,7 +199,7 @@ _dp label = forever $ do
 register :: SubAgent [Packet]
 register = do
     s <- mibs <$> ask
-    m  <- liftIO $ readIORef s
+    m  <- liftIO $ readTVarIO s
     (toReg, toUnReg) <- liftIO $ takeMVar (DL.get MIBTree.register m)
 --    liftIO $ mapM_ (\x -> print ("R " ++ show x)) toReg
 --    liftIO $ mapM_ (\x -> print ("UR " ++ show x)) toUnReg
@@ -221,7 +217,7 @@ register = do
 open :: SubAgent Packet
 open = do
     s <- mibs <$> ask
-    m <- liftIO $ readIORef s
+    m <- liftIO $ readTVarIO s
     let open' = Open minBound (DL.get moduleOID m) ("Haskell AgentX sub-aagent")
     return $ mkPacket def open' def minBound minBound minBound 
 

@@ -48,7 +48,7 @@ rwi io = rwValue readV commit test undo
 
 dynTree :: IORef Value -> Update
 dynTree i = Update $ do
-    Integer count <- liftIO $ readIORef i
+    Integer count <- readIORef i
     return $ concatMap fun [0 .. count]
     where
     fun x = [ mkObject (fromIntegral x) "trees" ("tree" ++ show x) Nothing
